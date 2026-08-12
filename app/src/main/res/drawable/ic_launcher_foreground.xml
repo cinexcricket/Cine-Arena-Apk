@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Ambient Backlight Glow behind TV Screen -->
+    <path
+        android:pathData="M 22,28 H 86 C 90,28 93,31 93,35 V 65 C 93,69 90,72 86,72 H 22 C 18,72 15,69 15,65 V 35 C 15,31 18,28 22,28 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="50"
+                android:gradientRadius="42"
+                android:type="radial">
+                <item android:color="#4000E5FF" android:offset="0.0" />
+                <item android:color="#00090D16" android:offset="1.0" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- TV Stand Base -->
+    <path
+        android:pathData="M 48,72 H 60 V 76 H 48 Z"
+        android:fillColor="#1E293B" />
+    <path
+        android:pathData="M 38,76 H 70 V 79 H 38 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- TV Outer Monitor Bezel (Cyan Neon Glowing Border) -->
+    <path
+        android:pathData="M 22,26 H 86 C 90.5,26 94,29.5 94,34 V 64 C 94,68.5 90.5,72 86,72 H 22 C 17.5,72 14,68.5 14,64 V 34 C 14,29.5 17.5,26 22,26 Z"
+        android:fillColor="#0F172A"
+        android:strokeWidth="3.5"
+        android:strokeColor="#00E5FF" />
+
+    <!-- Inner Glass TV Screen Area -->
+    <path
+        android:pathData="M 20,30 H 88 V 68 H 20 Z"
+        android:fillColor="#070A14" />
+
+    <!-- Top Right "LIVE" Red Indicator Badge on TV Screen -->
+    <path
+        android:pathData="M 70,34 H 84 V 41 H 70 Z"
+        android:fillColor="#FF2A4B" />
+    <path
+        android:pathData="M 74,37.5 A 1.5,1.5 0 1 1 71,37.5 A 1.5,1.5 0 1 1 74,37.5 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Letter C in 'CA' (Bold White & Silver metallic) -->
+    <path
+        android:pathData="M 41,41 C 33,41 27,46.5 27,54 C 27,61.5 33,67 41,67 C 46,67 49,65 52,61 L 47,57 C 45,59 43,61 41,61 C 37,61 33,58 33,54 C 33,50 37,47 41,47 C 43,47 45,49 47,51 L 52,47 C 49,43 46,41 41,41 Z"
+        android:fillColor="#FFFFFF" />
+
+    <!-- Letter A in 'CA' (Electric Blue / Cyan Accent Body) -->
+    <path
+        android:pathData="M 57,41 L 48,67 H 54 L 56,61 H 64 L 66,67 H 72 L 63,41 H 57 Z"
+        android:fillColor="#00E5FF" />
+
+    <!-- Letter A Cutout Space -->
+    <path
+        android:pathData="M 60,46 L 58,56 H 62 Z"
+        android:fillColor="#070A14" />
+
+    <!-- Embedded Bright Play Button Icon next to CA inside TV -->
+    <path
+        android:pathData="M 71,50 L 81,55.5 L 71,61 Z"
+        android:fillColor="#2563EB"
+        android:strokeWidth="1.5"
+        android:strokeColor="#00E5FF"
+        android:strokeLineJoin="round" />
+
+</vector>
+
+
