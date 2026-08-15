@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.animation.ExperimentalSharedTransitionApi::class)
+
 package com.example
 
 import android.app.Activity
@@ -13,11 +15,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -49,6 +54,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
@@ -153,18 +159,74 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val liveLikesCount by viewModel.liveMatchLikes.collectAsState()
     val showProfileDialog by viewModel.showProfileDialog.collectAsState()
 
+    // Orientation Event Listener to unlock rotation ONLY when phone auto-rotation is ON
+    DisposableEffect(context, activeChannel) {
+        val orientationEventListener = object : android.view.OrientationEventListener(context, android.hardware.SensorManager.SENSOR_DELAY_NORMAL) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN || activity == null) return
+
+                // Check if system auto-rotate is enabled on the device
+                val isSystemAutoRotateOn = try {
+                    android.provider.Settings.System.getInt(
+                        context.contentResolver,
+                        android.provider.Settings.System.ACCELEROMETER_ROTATION,
+                        0
+                    ) == 1
+                } catch (e: Exception) {
+                    false
+                }
+
+                // If mobile orientation is locked, NEVER rotate app based on sensor
+                if (!isSystemAutoRotateOn) return
+
+                // Check rotation angles: Landscape ~ 90° or 270°; Portrait ~ 0° or 180°
+                val isLandscapeAngle = (orientation in 65..115) || (orientation in 245..295)
+                val isPortraitAngle = (orientation in 335..359) || (orientation in 0..25) || (orientation in 155..205)
+
+                if (activeChannel != null) {
+                    if (isLandscapeAngle && !isPlayerFullscreen) {
+                        isPlayerFullscreen = true
+                        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    } else if (isPortraitAngle && isPlayerFullscreen) {
+                        isPlayerFullscreen = false
+                        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                    }
+                }
+            }
+        }
+        if (orientationEventListener.canDetectOrientation()) {
+            orientationEventListener.enable()
+        }
+        onDispose {
+            orientationEventListener.disable()
+        }
+    }
+
     val homeMatchesState by viewModel.homeMatches.collectAsState()
     val sportsChannelsState by viewModel.sportsChannels.collectAsState()
     val tvChannelsState by viewModel.tvChannels.collectAsState()
+    val moviesState by viewModel.movies.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
+
+    val isRefreshingHome by viewModel.isRefreshingHome.collectAsState()
+    val isRefreshingSports by viewModel.isRefreshingSports.collectAsState()
+    val isRefreshingTv by viewModel.isRefreshingTv.collectAsState()
+    val isRefreshingMovies by viewModel.isRefreshingMovies.collectAsState()
 
     val selectedHomeCategory by viewModel.selectedHomeCategory.collectAsState()
     val selectedSportsCategory by viewModel.selectedSportsCategory.collectAsState()
     val selectedTvCategory by viewModel.selectedTvCategory.collectAsState()
+    val selectedMovieCategory by viewModel.selectedMovieCategory.collectAsState()
     val searchQueryTv by viewModel.searchQueryTv.collectAsState()
     val searchQuerySports by viewModel.searchQuerySports.collectAsState()
+    val searchQueryMovies by viewModel.searchQueryMovies.collectAsState()
+    val continueWatchingList by viewModel.continueWatchingList.collectAsState()
+    val activePlaybackInitialPosition by viewModel.activePlaybackInitialPosition.collectAsState()
 
     val closePlayerAndReturn = {
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        isPlayerFullscreen = false
+        isPlayerExpanded = false
         viewModel.closePlayer()
         if (lastSourceTab != null) {
             selectedTab = lastSourceTab!!
@@ -180,7 +242,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
             }
             isPlayerFullscreen -> {
                 isPlayerFullscreen = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
             activeChannel != null -> {
                 closePlayerAndReturn()
@@ -199,18 +261,41 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         (activity as? MainActivity)?.updatePipParams(activeChannel != null)
     }
 
-    // Automatically expand player and restore source tab when exiting System PiP mode
-    LaunchedEffect(isInPipMode) {
-        if (!isInPipMode && activeChannel != null) {
-            isPlayerExpanded = true
-            isPlayerFullscreen = false
-            if (lastSourceTab != null) {
-                selectedTab = lastSourceTab!!
+    val enterPipMode = {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
+            try {
+                val params = PictureInPictureParams.Builder()
+                    .setAspectRatio(Rational(16, 9))
+                    .build()
+                activity.enterPictureInPictureMode(params)
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
 
-    val playerContent = remember(activeChannel, activeMatch) {
+    // Automatically expand player and restore source tab/fullscreen state when exiting System PiP mode
+    var wasFullscreenBeforePip by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isInPipMode) {
+        if (isInPipMode) {
+            wasFullscreenBeforePip = isPlayerFullscreen
+        } else if (activeChannel != null) {
+            isPlayerExpanded = true
+            if (wasFullscreenBeforePip) {
+                isPlayerFullscreen = true
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            } else {
+                isPlayerFullscreen = false
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                if (lastSourceTab != null) {
+                    selectedTab = lastSourceTab!!
+                }
+            }
+        }
+    }
+
+    val playerContent = remember(activeChannel, activeMatch, activePlaybackInitialPosition) {
         if (activeChannel == null) null
         else movableContentOf { isFs: Boolean, isMini: Boolean, isPip: Boolean, playerModifier: Modifier ->
             activeChannel?.let { ch ->
@@ -223,31 +308,59 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                     origin = ch.origin,
                     title = activeMatch?.title ?: ch.name,
                     subtitle = activeMatch?.subtitle ?: ch.category,
+                    initialPositionMs = activePlaybackInitialPosition,
                     isFullscreen = isFs,
                     isMiniPlayer = isMini,
                     isInPipMode = isPip,
                     onBackClick = {
                         if (isFs) {
                             isPlayerFullscreen = false
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                         } else {
                             closePlayerAndReturn()
                         }
                     },
                     onFullscreenToggle = { fs ->
+                        if (!isPlayerExpanded) {
+                            if (lastSourceTab != null) {
+                                selectedTab = lastSourceTab!!
+                            }
+                            isPlayerExpanded = true
+                        }
                         isPlayerFullscreen = fs
                         activity?.requestedOrientation = if (fs) {
-                            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                         } else {
-                            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                         }
                     },
                     onMiniPlayerToggle = {
-                        isPlayerFullscreen = false
-                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                        isPlayerExpanded = false
+                        if (!isPlayerExpanded) {
+                            if (lastSourceTab != null) {
+                                selectedTab = lastSourceTab!!
+                            }
+                            isPlayerExpanded = true
+                        } else {
+                            isPlayerFullscreen = false
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            isPlayerExpanded = false
+                        }
+                    },
+                    onEnterPipClick = {
+                        if (isPlayerExpanded) {
+                            if (isPlayerFullscreen) {
+                                isPlayerFullscreen = false
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            }
+                            isPlayerExpanded = false
+                        } else {
+                            enterPipMode()
+                        }
                     },
                     onCloseClick = { closePlayerAndReturn() },
+                    onPlaybackProgress = { pos, dur ->
+                        viewModel.updatePlaybackProgress(pos, dur)
+                    },
                     modifier = playerModifier
                 )
             }
@@ -301,6 +414,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
             ) {
                 CineDrawerContent(
                     onOpenNetworkStream = { showNetworkStreamDialog = true },
+                    onOpenMovies = { selectedTab = CineTab.MOVIES },
+                    onOpenFavorites = { selectedTab = CineTab.FAVORITES },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
                     }
@@ -325,11 +440,13 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                     CineBottomNavBar(
                         selectedTab = selectedTab,
                         onTabSelected = { tab ->
-                            if (activeChannel != null) {
+                            if (tab != selectedTab) {
                                 viewModel.closePlayer()
+                                isPlayerExpanded = false
+                                isPlayerFullscreen = false
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                             }
                             selectedTab = tab
-                            lastSourceTab = null
                         }
                     )
                 }
@@ -344,17 +461,89 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                 if (isEffectivelyFullscreen && activeChannel != null && playerContent != null) {
                     // LANDSCAPE / FULLSCREEN MODE (Captures 100% display, no header, no bottom nav)
                     playerContent(true, false, false, Modifier.fillMaxSize())
-                } else {
-                    // PORTRAIT MODE
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        // Show top player if active and expanded
-                        if (activeChannel != null && isPlayerExpanded && playerContent != null) {
-                            playerContent(false, false, false, Modifier.fillMaxWidth().height(210.dp))
-                        }
+                } else if (activeChannel != null && isPlayerExpanded && playerContent != null) {
+                    if (selectedTab == CineTab.SPORTS) {
+                        SportsScreen(
+                            sportsChannelsState = sportsChannelsState,
+                            favorites = favorites,
+                            selectedCategory = selectedSportsCategory,
+                            searchQuery = searchQuerySports,
+                            activeChannel = activeChannel,
+                            playerContent = {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier.fillMaxSize()
+                                )
+                            },
+                            onCategorySelected = { viewModel.selectedSportsCategory.value = it },
+                            onSearchQueryChange = { viewModel.searchQuerySports.value = it },
+                            onChannelClick = { channel ->
+                                lastSourceTab = CineTab.SPORTS
+                                isPlayerExpanded = true
+                                isPlayerFullscreen = false
+                                viewModel.playChannel(channel)
+                            },
+                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                            onRefresh = { viewModel.fetchSportsChannels(isPullRefresh = true) },
+                            isRefreshing = isRefreshingSports
+                        )
+                    } else if (selectedTab == CineTab.TV) {
+                        TvScreen(
+                            tvChannelsState = tvChannelsState,
+                            favorites = favorites,
+                            selectedCategory = selectedTvCategory,
+                            searchQuery = searchQueryTv,
+                            activeChannel = activeChannel,
+                            playerContent = {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier.fillMaxSize()
+                                )
+                            },
+                            onCategorySelected = { viewModel.selectedTvCategory.value = it },
+                            onSearchQueryChange = { viewModel.searchQueryTv.value = it },
+                            onChannelClick = { channel ->
+                                lastSourceTab = CineTab.TV
+                                isPlayerExpanded = true
+                                isPlayerFullscreen = false
+                                viewModel.playChannel(channel)
+                            },
+                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                            onRefresh = { viewModel.fetchTvChannels(isPullRefresh = true) },
+                            isRefreshing = isRefreshingTv
+                        )
+                    } else {
+                        val currentItemId = activeMatch?.id ?: activeChannel?.id ?: ""
+                        // EXPANDED VIDEO PLAYER SCREEN FOR MATCHES / OTHER CONTENT
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(CineBackground)
+                        ) {
+                            // Top Video Player Area with Shared Bounds
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .aspectRatio(16f / 9f)
+                                    .background(Color.Black)
+                                    .cineSharedBounds("card_$currentItemId")
+                            ) {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier
+                                        .fillMaxSize()
+                                        .cineSharedElement("poster_$currentItemId")
+                                )
+                            }
 
-                        // Main Screen Area
-                        Box(modifier = Modifier.weight(1f)) {
-                            if (activeChannel != null && isPlayerExpanded && activeMatch != null) {
+                            // Detail Overlay Area below Player
+                            Box(modifier = Modifier.weight(1f)) {
                                 PlayerDetailOverlay(
                                     activeMatch = activeMatch,
                                     activeChannel = activeChannel,
@@ -379,156 +568,202 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     },
                                     modifier = Modifier.fillMaxSize()
                                 )
-                            } else {
-                                when (selectedTab) {
-                                    CineTab.HOME -> {
-                                        HomeScreen(
-                                            homeMatchesState = homeMatchesState,
-                                            favorites = favorites,
-                                            selectedCategory = selectedHomeCategory,
-                                            onCategorySelected = { viewModel.selectedHomeCategory.value = it },
-                                            onMatchClick = { match ->
-                                                lastSourceTab = CineTab.HOME
-                                                viewModel.playMatch(match)
-                                                selectedTab = CineTab.HOME
-                                            },
-                                            onToggleFavorite = { match -> viewModel.toggleFavoriteMatch(match) },
-                                            onRefresh = { viewModel.fetchHomeMatches() }
+                            }
+                        }
+                    }
+                } else {
+                    // BROWSE SCREENS
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(CineBackground)
+                    ) {
+                        when (selectedTab) {
+                            CineTab.HOME -> {
+                                HomeScreen(
+                                    homeMatchesState = homeMatchesState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedHomeCategory,
+                                    onCategorySelected = { viewModel.selectedHomeCategory.value = it },
+                                    onMatchClick = { match ->
+                                        lastSourceTab = CineTab.HOME
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playMatch(match)
+                                        selectedTab = CineTab.HOME
+                                    },
+                                    onToggleFavorite = { match -> viewModel.toggleFavoriteMatch(match) },
+                                    onRefresh = { viewModel.fetchHomeMatches(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingHome
+                                )
+                            }
+                            CineTab.SPORTS -> {
+                                SportsScreen(
+                                    sportsChannelsState = sportsChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedSportsCategory,
+                                    searchQuery = searchQuerySports,
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    onCategorySelected = { viewModel.selectedSportsCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQuerySports.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.SPORTS
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                                    onRefresh = { viewModel.fetchSportsChannels(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingSports
+                                )
+                            }
+                            CineTab.TV -> {
+                                TvScreen(
+                                    tvChannelsState = tvChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedTvCategory,
+                                    searchQuery = searchQueryTv,
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    onCategorySelected = { viewModel.selectedTvCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryTv.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.TV
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                                    onRefresh = { viewModel.fetchTvChannels(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingTv
+                                )
+                            }
+                            CineTab.HISTORY -> {
+                                HistoryScreen(
+                                    historyList = continueWatchingList,
+                                    onPlayItem = { item ->
+                                        lastSourceTab = CineTab.HISTORY
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playContinueWatchingItem(item)
+                                    },
+                                    onRemoveItem = { id ->
+                                        viewModel.removeContinueWatchingItem(id)
+                                    },
+                                    onClearAll = {
+                                        viewModel.clearAllHistory()
+                                    }
+                                )
+                            }
+                            CineTab.FAVORITES -> {
+                                FavoritesScreen(
+                                    favorites = favorites,
+                                    onPlayFavorite = { fav ->
+                                        lastSourceTab = CineTab.FAVORITES
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        val favChannel = com.example.model.ChannelItem(
+                                            id = fav.id,
+                                            name = fav.title,
+                                            category = fav.category,
+                                            logo = fav.logoUrl,
+                                            background = fav.backgroundUrl,
+                                            poster = fav.backgroundUrl,
+                                            streamType = fav.streamType,
+                                            streamUrl = fav.streamUrl
                                         )
-                                    }
-                                    CineTab.SPORTS -> {
-                                    SportsScreen(
-                                        sportsChannelsState = sportsChannelsState,
-                                        favorites = favorites,
-                                        selectedCategory = selectedSportsCategory,
-                                        searchQuery = searchQuerySports,
-                                        activeChannel = activeChannel,
-                                        onCategorySelected = { viewModel.selectedSportsCategory.value = it },
-                                        onSearchQueryChange = { viewModel.searchQuerySports.value = it },
-                                        onChannelClick = { channel ->
-                                            lastSourceTab = CineTab.SPORTS
-                                            viewModel.playChannel(channel)
-                                        },
-                                        onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
-                                        onRefresh = { viewModel.fetchSportsChannels() }
-                                    )
-                                    }
-                                    CineTab.TV -> {
-                                        TvScreen(
-                                            tvChannelsState = tvChannelsState,
-                                            favorites = favorites,
-                                            selectedCategory = selectedTvCategory,
-                                            searchQuery = searchQueryTv,
-                                            activeChannel = activeChannel,
-                                            onCategorySelected = { viewModel.selectedTvCategory.value = it },
-                                            onSearchQueryChange = { viewModel.searchQueryTv.value = it },
-                                            onChannelClick = { channel ->
-                                                lastSourceTab = CineTab.TV
-                                                viewModel.playChannel(channel)
-                                            },
-                                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
-                                            onRefresh = { viewModel.fetchTvChannels() }
+                                        viewModel.playChannel(favChannel)
+                                        selectedTab = CineTab.FAVORITES
+                                    },
+                                    onRemoveFavorite = { fav ->
+                                        val favChannel = com.example.model.ChannelItem(
+                                            id = fav.id,
+                                            name = fav.title,
+                                            category = fav.category,
+                                            logo = fav.logoUrl,
+                                            background = fav.backgroundUrl,
+                                            poster = fav.backgroundUrl,
+                                            streamType = fav.streamType,
+                                            streamUrl = fav.streamUrl
                                         )
+                                        viewModel.toggleFavoriteChannel(favChannel)
                                     }
-                                    CineTab.FAVORITES -> {
-                                    FavoritesScreen(
-                                        favorites = favorites,
-                                        onPlayFavorite = { fav ->
-                                            lastSourceTab = CineTab.FAVORITES
-                                            val favChannel = com.example.model.ChannelItem(
-                                                id = fav.id,
-                                                name = fav.title,
-                                                category = fav.category,
-                                                logo = fav.logoUrl,
-                                                background = fav.backgroundUrl,
-                                                streamType = fav.streamType,
-                                                streamUrl = fav.streamUrl
-                                            )
-                                            viewModel.playChannel(favChannel)
-                                            selectedTab = CineTab.FAVORITES
-                                        },
-                                        onRemoveFavorite = { fav ->
-                                            val favChannel = com.example.model.ChannelItem(
-                                                id = fav.id,
-                                                name = fav.title,
-                                                category = fav.category,
-                                                logo = fav.logoUrl,
-                                                background = fav.backgroundUrl,
-                                                streamType = fav.streamType,
-                                                streamUrl = fav.streamUrl
-                                            )
-                                            viewModel.toggleFavoriteChannel(favChannel)
+                                )
+                            }
+                            CineTab.MOVIES -> {
+                                MoviesScreen(
+                                    moviesState = moviesState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedMovieCategory,
+                                    searchQuery = searchQueryMovies,
+                                    activeMatchId = activeMatch?.id ?: activeChannel?.id,
+                                    onCategorySelected = { viewModel.selectedMovieCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryMovies.value = it },
+                                    onMovieClick = { movie ->
+                                        lastSourceTab = CineTab.MOVIES
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playMatch(movie)
+                                    },
+                                    onToggleFavorite = { movie -> viewModel.toggleFavoriteMatch(movie) },
+                                    onRefresh = { viewModel.fetchMovies(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingMovies
+                                )
+                            }
+                        }
+
+                                        // FLOATING IN-APP PIP MINI-PLAYER OVERLAY
+                                        if (activeChannel != null && !isPlayerExpanded && playerContent != null) {
+                                            var offsetX by remember { mutableFloatStateOf(0f) }
+                                            var offsetY by remember { mutableFloatStateOf(0f) }
+                                            Box(
+                                                modifier = Modifier
+                                                    .align(Alignment.BottomEnd)
+                                                    .padding(bottom = 12.dp, end = 12.dp)
+                                                    .offset { IntOffset(offsetX.roundToInt(), offsetY.roundToInt()) }
+                                                    .clickable {
+                                                        if (lastSourceTab != null) {
+                                                            selectedTab = lastSourceTab!!
+                                                        }
+                                                        isPlayerExpanded = true
+                                                    }
+                                                    .pointerInput(Unit) {
+                                                        detectDragGestures { change, dragAmount ->
+                                                            change.consume()
+                                                            offsetX += dragAmount.x
+                                                            offsetY += dragAmount.y
+                                                        }
+                                                    }
+                                            ) {
+                                                playerContent(
+                                                    false,
+                                                    true,
+                                                    false,
+                                                    Modifier
+                                                        .width(220.dp)
+                                                        .height(124.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Custom Network Stream Dialog Modal
+                                if (showNetworkStreamDialog) {
+                                    NetworkStreamDialog(
+                                        onDismiss = { showNetworkStreamDialog = false },
+                                        onPlayStream = { url, cookie, referer, origin, drmLicense, drmType ->
+                                            viewModel.playCustomStream(url, cookie, referer, origin, drmLicense, drmType)
+                                            isPlayerFullscreen = true
+                                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                                         }
                                     )
                                 }
                             }
                         }
-
-                    // FLOATING IN-APP PIP MINI-PLAYER OVERLAY
-                    if (activeChannel != null && !isPlayerExpanded) {
-                        activeChannel?.let { ch ->
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.BottomEnd)
-                                    .padding(bottom = 12.dp, end = 12.dp)
-                            ) {
-                                CinePlayerView(
-                                    streamUrl = ch.streamUrl,
-                                    streamType = ch.streamType,
-                                    drmConfig = ch.drm,
-                                    cookie = ch.cookie,
-                                    referer = ch.referer,
-                                    origin = ch.origin,
-                                    title = activeMatch?.title ?: ch.name,
-                                    subtitle = activeMatch?.subtitle ?: ch.category,
-                                    isFullscreen = false,
-                                    isMiniPlayer = true,
-                                    onBackClick = {},
-                                    onFullscreenToggle = { fs ->
-                                        if (lastSourceTab != null) {
-                                            selectedTab = lastSourceTab!!
-                                        }
-                                        isPlayerExpanded = true
-                                        isPlayerFullscreen = fs
-                                        activity?.requestedOrientation = if (fs) {
-                                            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                                        } else {
-                                            ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-                                        }
-                                    },
-                                    onMiniPlayerToggle = {
-                                        if (lastSourceTab != null) {
-                                            selectedTab = lastSourceTab!!
-                                        }
-                                        isPlayerExpanded = true
-                                    },
-                                    onCloseClick = { closePlayerAndReturn() },
-                                    modifier = Modifier
-                                        .width(220.dp)
-                                        .height(124.dp)
-                                )
-                            }
-                        }
                     }
                 }
             }
-
-            // Custom Network Stream Dialog Modal
-            if (showNetworkStreamDialog) {
-                NetworkStreamDialog(
-                    onDismiss = { showNetworkStreamDialog = false },
-                    onPlayStream = { url, cookie, referer, origin, drmLicense, drmType ->
-                        viewModel.playCustomStream(url, cookie, referer, origin, drmLicense, drmType)
-                        isPlayerFullscreen = true
-                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-                    }
-                )
-            }
         }
-    }
-}
-}
-}
-}
-}
 

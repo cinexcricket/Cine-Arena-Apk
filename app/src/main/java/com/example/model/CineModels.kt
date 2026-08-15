@@ -19,6 +19,21 @@ data class MatchItem(
     @Json(name = "poster") val poster: String? = null,
     @Json(name = "status") val status: String = "LIVE",
     @Json(name = "startTime") val startTime: String? = null,
+    @Json(name = "channels") val channels: List<ChannelItem> = emptyList(),
+    @Json(name = "category") val category: String? = null,
+    @Json(name = "categories") val categories: String? = null,
+    @Json(name = "heading") val heading: String? = null
+) {
+    val displayCategory: String
+        get() = categories?.takeIf { it.isNotBlank() }
+            ?: category?.takeIf { it.isNotBlank() }
+            ?: sport.takeIf { it.isNotBlank() }
+            ?: "Webseries"
+}
+
+@JsonClass(generateAdapter = true)
+data class MovieResponse(
+    @Json(name = "matches") val matches: List<MatchItem> = emptyList(),
     @Json(name = "channels") val channels: List<ChannelItem> = emptyList()
 )
 
@@ -41,6 +56,8 @@ data class ChannelItem(
     @Json(name = "category") val category: String = "General",
     @Json(name = "logo") val logo: String? = null,
     @Json(name = "background") val background: String? = null,
+    @Json(name = "poster") val poster: String? = null,
+    @Json(name = "quality") val quality: String? = null,
     @Json(name = "status") val status: String = "LIVE",
     @Json(name = "streamType") val streamType: String = "hls", // hls, dash, mp4, iframe
     @Json(name = "streamUrl") val streamUrl: String = "",

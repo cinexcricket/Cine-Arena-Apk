@@ -30,7 +30,11 @@ sealed interface UiState<out T> {
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getDatabase(application)
-    private val repository = CineRepository(favoriteDao = db.favoriteDao(), chatDao = db.chatDao())
+    private val repository = CineRepository(
+        favoriteDao = db.favoriteDao(),
+        chatDao = db.chatDao(),
+        continueWatchingDao = db.continueWatchingDao()
+    )
 
     val favorites: StateFlow<List<FavoriteEntity>> = repository.getAllFavorites()
         .stateIn(
@@ -38,6 +42,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             started = SharingStarted.WhileSubscribed(5000),
             initialValue = emptyList()
         )
+
+    val continueWatchingList: StateFlow<List<com.example.data.ContinueWatchingEntity>> =
+        (repository.getContinueWatching() ?: kotlinx.coroutines.flow.flowOf(emptyList()))
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = emptyList()
+            )
+
+    val activePlaybackInitialPosition = MutableStateFlow<Long>(0L)
 
     private val _homeMatches = MutableStateFlow<UiState<List<MatchItem>>>(UiState.Loading)
     val homeMatches: StateFlow<UiState<List<MatchItem>>> = _homeMatches.asStateFlow()
@@ -48,13 +62,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _tvChannels = MutableStateFlow<UiState<List<ChannelItem>>>(UiState.Loading)
     val tvChannels: StateFlow<UiState<List<ChannelItem>>> = _tvChannels.asStateFlow()
 
+    private val _movies = MutableStateFlow<UiState<List<MatchItem>>>(UiState.Loading)
+    val movies: StateFlow<UiState<List<MatchItem>>> = _movies.asStateFlow()
+
     // Filter states
     val isDarkMode = MutableStateFlow(true)
     val selectedHomeCategory = MutableStateFlow("All Sports")
     val selectedSportsCategory = MutableStateFlow("All Sports")
     val selectedTvCategory = MutableStateFlow("All Channels")
+    val selectedMovieCategory = MutableStateFlow("All Movies")
     val searchQueryTv = MutableStateFlow("")
     val searchQuerySports = MutableStateFlow("")
+    val searchQueryMovies = MutableStateFlow("")
 
     // Active playing items
     val activeMatch = MutableStateFlow<MatchItem?>(null)
@@ -70,6 +89,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     val showProfileDialog = MutableStateFlow(false)
     val pendingChatText = MutableStateFlow("")
+
+    // Pull-to-refresh states
+    val isRefreshingHome = MutableStateFlow(false)
+    val isRefreshingSports = MutableStateFlow(false)
+    val isRefreshingTv = MutableStateFlow(false)
+    val isRefreshingMovies = MutableStateFlow(false)
 
     // Reaction Likes Counter
     val liveMatchLikes = MutableStateFlow(1240)
@@ -151,21 +176,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         fetchHomeMatches()
         fetchSportsChannels()
         fetchTvChannels()
+        fetchMovies()
     }
 
-    fun fetchHomeMatches() {
+    fun fetchHomeMatches(isPullRefresh: Boolean = false) {
         viewModelScope.launch {
-            _homeMatches.value = UiState.Loading
+            if (isPullRefresh) {
+                isRefreshingHome.value = true
+            } else if (_homeMatches.value !is UiState.Success) {
+                _homeMatches.value = UiState.Loading
+            }
             val result = repository.fetchHomeMatches()
             result.onSuccess { data ->
                 val processedMatches = data.matches.map { match -> ensureMatchHasChannels(match) }
                 if (processedMatches.isNotEmpty()) {
                     _homeMatches.value = UiState.Success(processedMatches)
-                } else {
+                } else if (_homeMatches.value !is UiState.Success) {
                     _homeMatches.value = UiState.Error("Network issue. Check your internet connection.")
                 }
             }.onFailure { err ->
-                _homeMatches.value = UiState.Error("Network issue. Check your internet connection.")
+                if (_homeMatches.value !is UiState.Success) {
+                    _homeMatches.value = UiState.Error("Network issue. Check your internet connection.")
+                }
+            }
+            if (isPullRefresh) {
+                isRefreshingHome.value = false
             }
         }
     }
@@ -307,39 +342,177 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun fetchSportsChannels() {
+    fun fetchSportsChannels(isPullRefresh: Boolean = false) {
         viewModelScope.launch {
-            _sportsChannels.value = UiState.Loading
+            if (isPullRefresh) {
+                isRefreshingSports.value = true
+            } else if (_sportsChannels.value !is UiState.Success) {
+                _sportsChannels.value = UiState.Loading
+            }
             val result = repository.fetchSportsChannels()
             result.onSuccess { data ->
                 _sportsChannels.value = UiState.Success(data.channels)
             }.onFailure { err ->
-                _sportsChannels.value = UiState.Error("Network issue. Check your internet connection.")
+                if (_sportsChannels.value !is UiState.Success) {
+                    _sportsChannels.value = UiState.Error("Network issue. Check your internet connection.")
+                }
+            }
+            if (isPullRefresh) {
+                isRefreshingSports.value = false
             }
         }
     }
 
-    fun fetchTvChannels() {
+    fun fetchTvChannels(isPullRefresh: Boolean = false) {
         viewModelScope.launch {
-            _tvChannels.value = UiState.Loading
+            if (isPullRefresh) {
+                isRefreshingTv.value = true
+            } else if (_tvChannels.value !is UiState.Success) {
+                _tvChannels.value = UiState.Loading
+            }
             val result = repository.fetchTvChannels()
             result.onSuccess { data ->
                 _tvChannels.value = UiState.Success(data.channels)
             }.onFailure { err ->
-                _tvChannels.value = UiState.Error("Network issue. Check your internet connection.")
+                if (_tvChannels.value !is UiState.Success) {
+                    _tvChannels.value = UiState.Error("Network issue. Check your internet connection.")
+                }
+            }
+            if (isPullRefresh) {
+                isRefreshingTv.value = false
             }
         }
     }
 
-    fun playMatch(match: MatchItem, channel: ChannelItem? = null) {
+    fun fetchMovies(isPullRefresh: Boolean = false) {
+        viewModelScope.launch {
+            if (isPullRefresh) {
+                isRefreshingMovies.value = true
+            } else if (_movies.value !is UiState.Success) {
+                _movies.value = UiState.Loading
+            }
+            val result = repository.fetchMovies()
+            result.onSuccess { data ->
+                val list = if (data.matches.isNotEmpty()) {
+                    data.matches
+                } else if (data.channels.isNotEmpty()) {
+                    data.channels.map { ch ->
+                        MatchItem(
+                            id = ch.id,
+                            sport = ch.category,
+                            title = ch.name,
+                            poster = ch.poster ?: ch.background ?: ch.logo,
+                            categories = ch.category,
+                            channels = listOf(ch)
+                        )
+                    }
+                } else {
+                    emptyList()
+                }
+
+                if (list.isNotEmpty()) {
+                    _movies.value = UiState.Success(list)
+                } else if (_movies.value !is UiState.Success) {
+                    _movies.value = UiState.Error("No movies or requested content found.")
+                }
+            }.onFailure { err ->
+                if (_movies.value !is UiState.Success) {
+                    _movies.value = UiState.Error("Network issue. Check your internet connection.")
+                }
+            }
+            if (isPullRefresh) {
+                isRefreshingMovies.value = false
+            }
+        }
+    }
+
+    fun playMatch(match: MatchItem, channel: ChannelItem? = null, initialPositionMs: Long = 0L) {
         val filledMatch = ensureMatchHasChannels(match)
+        activePlaybackInitialPosition.value = initialPositionMs
         activeMatch.value = filledMatch
         activeChannel.value = channel ?: filledMatch.channels.firstOrNull()
     }
 
-    fun playChannel(channel: ChannelItem) {
+    fun playChannel(channel: ChannelItem, initialPositionMs: Long = 0L) {
+        activePlaybackInitialPosition.value = initialPositionMs
         activeMatch.value = null
         activeChannel.value = channel
+    }
+
+    fun playContinueWatchingItem(item: com.example.data.ContinueWatchingEntity) {
+        activePlaybackInitialPosition.value = item.positionMs
+        val channel = ChannelItem(
+            id = item.id,
+            name = item.title,
+            category = item.category,
+            logo = item.poster.ifBlank { item.background },
+            background = item.background.ifBlank { item.poster },
+            poster = item.poster.ifBlank { item.background },
+            streamType = item.streamType,
+            streamUrl = item.streamUrl
+        )
+        val match = MatchItem(
+            id = item.id,
+            sport = item.category.ifBlank { "Movie" },
+            title = item.title,
+            subtitle = item.subtitle,
+            status = "LIVE",
+            poster = item.poster.ifBlank { item.background },
+            channels = listOf(channel)
+        )
+        activeMatch.value = match
+        activeChannel.value = channel
+    }
+
+    fun removeContinueWatchingItem(id: String) {
+        viewModelScope.launch {
+            repository.deleteContinueWatching(id)
+        }
+    }
+
+    fun clearAllContinueWatching() {
+        viewModelScope.launch {
+            repository.clearContinueWatching()
+        }
+    }
+
+    fun clearAllHistory() {
+        clearAllContinueWatching()
+    }
+
+    fun updatePlaybackProgress(positionMs: Long, durationMs: Long) {
+        if (positionMs < 1000L) return
+        val currentMatch = activeMatch.value
+        val currentChannel = activeChannel.value ?: return
+
+        val id = currentMatch?.id ?: currentChannel.id
+        val title = currentMatch?.title ?: currentChannel.name
+        val subtitle = currentMatch?.subtitle ?: currentChannel.category
+        val category = currentMatch?.sport ?: currentChannel.category
+        val poster = currentMatch?.poster ?: currentChannel.poster ?: currentChannel.logo ?: ""
+        val background = currentMatch?.poster ?: currentChannel.background ?: currentChannel.poster ?: ""
+        val streamType = currentChannel.streamType
+        val streamUrl = currentChannel.streamUrl
+
+        if (id.isBlank() || streamUrl.isBlank()) return
+
+        val entity = com.example.data.ContinueWatchingEntity(
+            id = id,
+            title = title,
+            subtitle = subtitle,
+            category = category,
+            poster = poster,
+            background = background,
+            streamType = streamType,
+            streamUrl = streamUrl,
+            positionMs = positionMs,
+            durationMs = durationMs,
+            lastWatchedTimestamp = System.currentTimeMillis()
+        )
+
+        viewModelScope.launch {
+            repository.saveContinueWatching(entity)
+        }
     }
 
     fun selectChannelForActiveMatch(channel: ChannelItem) {
@@ -349,6 +522,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun closePlayer() {
         activeMatch.value = null
         activeChannel.value = null
+        activePlaybackInitialPosition.value = 0L
     }
 
     fun toggleFavoriteMatch(match: MatchItem) {
@@ -378,8 +552,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 title = channel.name,
                 subtitle = channel.category,
                 category = channel.category,
-                logoUrl = channel.logo ?: "",
-                backgroundUrl = channel.background ?: "",
+                logoUrl = channel.poster ?: channel.logo ?: "",
+                backgroundUrl = channel.poster ?: channel.background ?: "",
                 streamType = channel.streamType,
                 streamUrl = channel.streamUrl
             )

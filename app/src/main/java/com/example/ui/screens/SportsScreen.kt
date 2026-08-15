@@ -18,6 +18,8 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +33,8 @@ import coil.compose.AsyncImage
 import com.example.data.FavoriteEntity
 import com.example.model.ChannelItem
 import com.example.ui.UiState
+import com.example.ui.components.cineSharedBounds
+import com.example.ui.components.cineSharedElement
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -41,11 +45,13 @@ fun SportsScreen(
     selectedCategory: String,
     searchQuery: String,
     activeChannel: ChannelItem? = null,
+    playerContent: (@Composable () -> Unit)? = null,
     onCategorySelected: (String) -> Unit,
     onSearchQueryChange: (String) -> Unit,
     onChannelClick: (ChannelItem) -> Unit,
     onToggleFavorite: (ChannelItem) -> Unit,
     onRefresh: () -> Unit,
+    isRefreshing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val categories = remember(sportsChannelsState) {
@@ -60,150 +66,169 @@ fun SportsScreen(
         }
     }
 
-    Column(
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
         modifier = modifier
             .fillMaxSize()
             .background(CineBackground)
     ) {
-        // Sports Header
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        Column(
+            modifier = Modifier.fillMaxSize()
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.EmojiEvents,
-                    contentDescription = null,
-                    tint = CinePrimary,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (activeChannel != null) "More Sports Channels" else "Live Sports Channels",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = CineTextPrimary
-                )
-            }
-
-            Surface(
-                color = CineLiveRedBg,
-                shape = RoundedCornerShape(12.dp),
-                border = BorderStroke(1.dp, CineLiveRed)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            // Video Player Section at Top of Screen (if video active)
+            if (playerContent != null) {
+                val currentItemId = activeChannel?.id ?: "active_sports_stream"
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(16f / 9f)
+                        .background(Color.Black)
+                        .cineSharedBounds("card_$currentItemId")
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(6.dp)
-                            .background(CineLiveRed, CircleShape)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "LIVE",
-                        color = CineLiveRed,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    playerContent()
                 }
             }
-        }
 
-        // Search Input Bar
-        Surface(
-            shape = RoundedCornerShape(14.dp),
-            color = CineSurface,
-            border = BorderStroke(1.dp, CineOutline),
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 2.dp)
-        ) {
+            // Live Sports Channels / More Sports Channels Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "Search",
-                    tint = CineTextSecondary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Box(
-                    modifier = Modifier.weight(1f),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    if (searchQuery.isEmpty()) {
-                        Text(
-                            text = "Search sports channels...",
-                            color = CineTextSecondary,
-                            fontSize = 13.sp
-                        )
-                    }
-                    androidx.compose.foundation.text.BasicTextField(
-                        value = searchQuery,
-                        onValueChange = onSearchQueryChange,
-                        singleLine = true,
-                        textStyle = LocalTextStyle.current.copy(
-                            fontSize = 13.sp,
-                            color = CineTextPrimary
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(CinePrimary),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-                if (searchQuery.isNotEmpty()) {
-                    Spacer(modifier = Modifier.width(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Clear",
-                        tint = CineTextSecondary,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .clickable { onSearchQueryChange("") }
+                        Icons.Default.EmojiEvents,
+                        contentDescription = null,
+                        tint = CinePrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (playerContent != null) "More Sports Channels" else "Live Sports Channels",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        color = CineTextPrimary
                     )
                 }
-            }
-        }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Category Pills
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.padding(bottom = 12.dp)
-        ) {
-            items(categories) { cat ->
-                val isSelected = (cat == selectedCategory)
                 Surface(
-                    onClick = { onCategorySelected(cat) },
-                    shape = RoundedCornerShape(20.dp),
-                    color = if (isSelected) CinePrimary else CineSurfaceVariant,
-                    border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
-                    modifier = Modifier.height(36.dp)
+                    color = CineLiveRedBg,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, CineLiveRed)
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.padding(horizontal = 16.dp)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .background(CineLiveRed, CircleShape)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = cat,
-                            color = if (isSelected) Color.White else CineTextSecondary,
-                            fontSize = 13.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            text = "LIVE",
+                            color = CineLiveRed,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
                         )
                     }
                 }
             }
-        }
+
+            // Search Input Bar
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = CineSurface,
+                border = BorderStroke(1.dp, CineOutline),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = "Search",
+                        tint = CineTextSecondary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier.weight(1f),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        if (searchQuery.isEmpty()) {
+                            Text(
+                                text = "Search sports channels...",
+                                color = CineTextSecondary,
+                                fontSize = 13.sp
+                            )
+                        }
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            singleLine = true,
+                            textStyle = LocalTextStyle.current.copy(
+                                fontSize = 13.sp,
+                                color = CineTextPrimary
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(CinePrimary),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (searchQuery.isNotEmpty()) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Clear",
+                            tint = CineTextSecondary,
+                            modifier = Modifier
+                                .size(18.dp)
+                                .clickable { onSearchQueryChange("") }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Category Pills
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(bottom = 8.dp)
+            ) {
+                items(categories) { cat ->
+                    val isSelected = (cat == selectedCategory)
+                    Surface(
+                        onClick = { onCategorySelected(cat) },
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isSelected) CinePrimary else CineSurfaceVariant,
+                        border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        ) {
+                            Text(
+                                text = cat,
+                                color = if (isSelected) Color.White else CineTextSecondary,
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+            }
 
         // 2-Column Grid
         when (sportsChannelsState) {
@@ -247,7 +272,8 @@ fun SportsScreen(
                         columns = GridCells.Fixed(gridColumns),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
                     ) {
                         items(filteredSports, key = { it.id }) { channel ->
                             val isFavorite = favorites.any { it.id == channel.id }
@@ -264,6 +290,7 @@ fun SportsScreen(
         }
     }
 }
+}
 
 @Composable
 fun SportsCard(
@@ -279,6 +306,7 @@ fun SportsCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .cineSharedBounds("card_${channel.id}")
             .clickable(onClick = onChannelClick)
     ) {
         Column(
@@ -295,7 +323,9 @@ fun SportsCard(
                     shape = RoundedCornerShape(12.dp),
                     color = Color.White,
                     border = BorderStroke(1.dp, CineOutline),
-                    modifier = Modifier.size(56.dp)
+                    modifier = Modifier
+                        .size(56.dp)
+                        .cineSharedElement("poster_${channel.id}")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         val imageUrl = if (!channel.logo.isNullOrEmpty()) channel.logo else channel.background

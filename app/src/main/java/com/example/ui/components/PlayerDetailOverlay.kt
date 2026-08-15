@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
@@ -93,7 +94,7 @@ fun PlayerDetailOverlay(
                 .padding(horizontal = 0.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            // Section 1: Available Audio & Servers Card (Compact height & full width)
+            // Section 1: Quality Availables Card
             if (channelsList.isNotEmpty()) {
                 Card(
                     shape = RoundedCornerShape(8.dp),
@@ -101,35 +102,69 @@ fun PlayerDetailOverlay(
                     border = BorderStroke(1.dp, CineOutline),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
+                    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+                        val headerTitle = remember(activeMatch) {
+                            if (!activeMatch?.heading.isNullOrBlank()) {
+                                activeMatch?.heading!!.trim()
+                            } else {
+                                val cat = (activeMatch?.displayCategory ?: "").lowercase()
+                                val isMovieOrSeries = cat.contains("movie") ||
+                                        cat.contains("webseries") ||
+                                        cat.contains("series") ||
+                                        cat.contains("vod") ||
+                                        cat.contains("film")
+                                if (isMovieOrSeries) {
+                                    "Quality Availables"
+                                } else {
+                                    "Availables Channels & Server"
+                                }
+                            }
+                        }
+
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(bottom = 3.dp)
+                            modifier = Modifier.padding(bottom = 5.dp)
                         ) {
                             Icon(
-                                Icons.Default.Sensors,
+                                Icons.Default.HighQuality,
                                 contentDescription = null,
                                 tint = CinePrimary,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(15.dp)
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = "Available Audio & Servers:",
+                                text = if (headerTitle.endsWith(":")) headerTitle else "$headerTitle :",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp,
                                 color = CineTextPrimary
                             )
                         }
 
+                        val qualityList = remember(channelsList, activeChannel) {
+                            channelsList.map { ch ->
+                                val name = ch.name.trim()
+                                val label = when {
+                                    name.equals("1080", ignoreCase = true) || name.equals("1080p", ignoreCase = true) -> "1080p"
+                                    name.equals("720", ignoreCase = true) || name.equals("720p", ignoreCase = true) -> "720p"
+                                    name.equals("480", ignoreCase = true) || name.equals("480p", ignoreCase = true) -> "480p"
+                                    name.equals("360", ignoreCase = true) || name.equals("360p", ignoreCase = true) -> "360p"
+                                    name.isNotBlank() -> name
+                                    !ch.quality.isNullOrBlank() -> ch.quality
+                                    else -> "Server ${ch.id}"
+                                }
+                                label to ch
+                            }
+                        }
+
                         LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(channelsList, key = { it.id }) { ch ->
-                                val isSelected = (activeChannel?.id == ch.id) || (activeChannel == null && ch == channelsList.first())
+                            items(qualityList, key = { it.first + it.second.id }) { (qualityLabel, targetChannel) ->
+                                val isSelected = (activeChannel?.id == targetChannel.id) || (activeChannel == null && targetChannel == channelsList.first())
                                 Surface(
-                                    onClick = { onChannelSelect(ch) },
+                                    onClick = { onChannelSelect(targetChannel) },
                                     shape = RoundedCornerShape(6.dp),
-                                    color = if (isSelected) CinePrimary.copy(alpha = 0.18f) else CineSurfaceVariant,
+                                    color = if (isSelected) CinePrimary.copy(alpha = 0.22f) else CineSurfaceVariant,
                                     border = BorderStroke(
                                         if (isSelected) 1.5.dp else 1.dp,
                                         if (isSelected) CinePrimary else CineOutline
@@ -139,16 +174,18 @@ fun PlayerDetailOverlay(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                     ) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = if (isSelected) CinePrimary else CineTextSecondary,
-                                            modifier = Modifier.size(11.dp)
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .background(
+                                                    if (isSelected) CinePrimary else CineTextSecondary.copy(alpha = 0.6f),
+                                                    CircleShape
+                                                )
                                         )
-                                        Spacer(modifier = Modifier.width(3.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
                                         Text(
-                                            text = if (ch.name.contains("(")) ch.name else "${ch.name} (HD)",
-                                            fontSize = 10.5.sp,
+                                            text = qualityLabel,
+                                            fontSize = 11.sp,
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                             color = if (isSelected) Color.White else CineTextPrimary
                                         )

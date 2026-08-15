@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.FavoriteEntity
 import com.example.model.ChannelItem
+import com.example.ui.components.cineSharedBounds
+import com.example.ui.components.cineSharedElement
 import com.example.ui.theme.*
 
 @Composable
@@ -166,6 +168,7 @@ fun FavoriteCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .cineSharedBounds("card_${item.id}")
             .clickable(onClick = onPlay)
     ) {
         Column(
@@ -180,7 +183,9 @@ fun FavoriteCard(
                     shape = RoundedCornerShape(12.dp),
                     color = Color.White,
                     border = BorderStroke(1.dp, CineOutline),
-                    modifier = Modifier.size(52.dp)
+                    modifier = Modifier
+                        .size(52.dp)
+                        .cineSharedElement("poster_${item.id}")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         if (item.logoUrl.isNotEmpty()) {

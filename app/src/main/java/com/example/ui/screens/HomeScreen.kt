@@ -13,11 +13,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,10 +34,25 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.ContinueWatchingEntity
 import com.example.data.FavoriteEntity
 import com.example.model.MatchItem
 import com.example.ui.UiState
+import com.example.ui.components.cineSharedBounds
+import com.example.ui.components.cineSharedElement
 import com.example.ui.theme.*
+
+private fun formatPlaybackTime(ms: Long): String {
+    val totalSeconds = (ms / 1000).coerceAtLeast(0)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format("%02d:%02d", minutes, seconds)
+    }
+}
 
 private fun formatShortCode(code: String?, fallbackName: String): String {
     val text = code?.takeIf { it.isNotBlank() } ?: fallbackName
@@ -71,6 +90,7 @@ private fun formatToIST(startTime: String?): String {
     return "$trimmed IST"
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     homeMatchesState: UiState<List<MatchItem>>,
@@ -80,6 +100,7 @@ fun HomeScreen(
     onMatchClick: (MatchItem) -> Unit,
     onToggleFavorite: (MatchItem) -> Unit,
     onRefresh: () -> Unit,
+    isRefreshing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
@@ -97,176 +118,184 @@ fun HomeScreen(
         }
     }
 
-    Column(
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
         modifier = modifier
             .fillMaxSize()
             .background(CineBackground)
     ) {
-        when (homeMatchesState) {
-            is UiState.Loading -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = CinePrimary)
-                }
-            }
-            is UiState.Error -> {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = homeMatchesState.message,
-                            color = CineLiveRed,
-                            fontSize = 14.sp
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Button(
-                            onClick = onRefresh,
-                            colors = ButtonDefaults.buttonColors(containerColor = CinePrimary)
-                        ) {
-                            Text("Retry")
-                        }
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            when (homeMatchesState) {
+                is UiState.Loading -> {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = CinePrimary)
                     }
                 }
-            }
-            is UiState.Success -> {
-                val matches = homeMatchesState.data.filter { match ->
-                    if (selectedCategory == "All Sports" || selectedCategory == "All") true
-                    else match.sport.equals(selectedCategory, ignoreCase = true)
-                }
-
-                LazyColumn(
-                    contentPadding = PaddingValues(bottom = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    item(key = "featured_matches_title") {
-                        // Featured Live Matches Header
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Bolt,
-                                    contentDescription = null,
-                                    tint = CinePrimary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = "Featured Live Matches",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp,
-                                    color = CineTextPrimary
-                                )
-                            }
-
-                            Surface(
-                                color = CineLiveRedBg,
-                                shape = RoundedCornerShape(12.dp),
-                                border = BorderStroke(1.dp, CineLiveRed)
+                is UiState.Error -> {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = homeMatchesState.message,
+                                color = CineLiveRed,
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = onRefresh,
+                                colors = ButtonDefaults.buttonColors(containerColor = CinePrimary)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(CineLiveRed, CircleShape)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Text(
-                                        text = "LIVE",
-                                        color = CineLiveRed,
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                                Text("Retry")
                             }
                         }
                     }
-
-                    item(key = "category_chips_row") {
-                        // Horizontal Category Pills
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        ) {
-                            items(categories) { cat ->
-                                val isSelected = (cat == selectedCategory)
-                                Surface(
-                                    onClick = { onCategorySelected(cat) },
-                                    shape = RoundedCornerShape(20.dp),
-                                    color = if (isSelected) CinePrimary else CineSurfaceVariant,
-                                    border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
-                                    modifier = Modifier.height(36.dp)
-                                ) {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier.padding(horizontal = 16.dp)
-                                    ) {
-                                        Text(
-                                            text = cat,
-                                            color = if (isSelected) Color.White else CineTextSecondary,
-                                            fontSize = 13.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                                        )
-                                    }
-                                }
-                            }
+                }
+                is UiState.Success -> {
+                    val matches = remember(homeMatchesState.data, selectedCategory) {
+                        homeMatchesState.data.filter { match ->
+                            if (selectedCategory == "All Sports" || selectedCategory == "All") true
+                            else match.sport.equals(selectedCategory, ignoreCase = true)
                         }
                     }
 
-                    if (matches.isEmpty()) {
-                        item(key = "empty_matches_view") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text("No live matches available", color = CineTextSecondary)
-                            }
-                        }
-                    } else {
-                        val matchRows = matches.chunked(columns)
+                    val matchRows = remember(matches, columns) { matches.chunked(columns) }
 
-                        items(matchRows, key = { row -> row.firstOrNull()?.id ?: "" }) { matchRow ->
+                    LazyColumn(
+                        contentPadding = PaddingValues(bottom = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        item(key = "featured_matches_title") {
+                            // Featured Live Matches Header
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 6.dp),
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                for (match in matchRow) {
-                                    Box(modifier = Modifier.weight(1f)) {
-                                        val isFavorite = favorites.any { it.id == match.id }
-                                        MatchCard(
-                                            match = match,
-                                            isFavorite = isFavorite,
-                                            onWatchClick = {
-                                                val rawStatus = match.status.trim().uppercase()
-                                                val statusText = if (rawStatus.isEmpty()) "LIVE" else rawStatus
-                                                val isLiveOrStreaming = statusText == "LIVE" || statusText == "FC LIVE" || statusText == "STREAMING" || statusText.contains("LIVE") || statusText.contains("STREAM")
-                                                if (isLiveOrStreaming) {
-                                                    onMatchClick(match)
-                                                }
-                                            },
-                                            onToggleFavorite = { onToggleFavorite(match) }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        Icons.Default.Bolt,
+                                        contentDescription = null,
+                                        tint = CinePrimary,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "Featured Live Matches",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 18.sp,
+                                        color = CineTextPrimary
+                                    )
+                                }
+
+                                Surface(
+                                    color = CineLiveRedBg,
+                                    shape = RoundedCornerShape(12.dp),
+                                    border = BorderStroke(1.dp, CineLiveRed)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(6.dp)
+                                                .background(CineLiveRed, CircleShape)
+                                        )
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text(
+                                            text = "LIVE",
+                                            color = CineLiveRed,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold
                                         )
                                     }
                                 }
-                                if (matchRow.size < columns) {
-                                    repeat(columns - matchRow.size) {
-                                        Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+
+                        item(key = "category_chips_row") {
+                            // Horizontal Category Pills
+                            LazyRow(
+                                contentPadding = PaddingValues(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier.padding(bottom = 4.dp)
+                            ) {
+                                items(categories) { cat ->
+                                    val isSelected = (cat == selectedCategory)
+                                    Surface(
+                                        onClick = { onCategorySelected(cat) },
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = if (isSelected) CinePrimary else CineSurfaceVariant,
+                                        border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
+                                        modifier = Modifier.height(36.dp)
+                                    ) {
+                                        Box(
+                                            contentAlignment = Alignment.Center,
+                                            modifier = Modifier.padding(horizontal = 16.dp)
+                                        ) {
+                                            Text(
+                                                text = cat,
+                                                color = if (isSelected) Color.White else CineTextSecondary,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        if (matches.isEmpty()) {
+                            item(key = "empty_matches_view") {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("No live matches available", color = CineTextSecondary)
+                                }
+                            }
+                        } else {
+                            items(matchRows, key = { row -> row.firstOrNull()?.id ?: "" }) { matchRow ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    for (match in matchRow) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            val isFavorite = favorites.any { it.id == match.id }
+                                            MatchCard(
+                                                match = match,
+                                                isFavorite = isFavorite,
+                                                onWatchClick = {
+                                                    val rawStatus = match.status.trim().uppercase()
+                                                    val statusText = if (rawStatus.isEmpty()) "LIVE" else rawStatus
+                                                    val isLiveOrStreaming = statusText == "LIVE" || statusText == "FC LIVE" || statusText == "STREAMING" || statusText.contains("LIVE") || statusText.contains("STREAM")
+                                                    if (isLiveOrStreaming) {
+                                                        onMatchClick(match)
+                                                    }
+                                                },
+                                                onToggleFavorite = { onToggleFavorite(match) }
+                                            )
+                                        }
+                                    }
+                                    if (matchRow.size < columns) {
+                                        repeat(columns - matchRow.size) {
+                                            Spacer(modifier = Modifier.weight(1f))
+                                        }
                                     }
                                 }
                             }
@@ -296,6 +325,7 @@ fun MatchCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .cineSharedBounds("card_${match.id}")
             .then(
                 if (isLiveOrStreaming) {
                     Modifier.clickable(onClick = onWatchClick)
@@ -310,6 +340,7 @@ fun MatchCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(180.dp)
+                    .cineSharedElement("poster_${match.id}")
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(Color(0xFF1E1B4B), Color(0xFF312E81))

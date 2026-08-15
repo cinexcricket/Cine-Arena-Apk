@@ -18,8 +18,11 @@ import androidx.annotation.OptIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -35,11 +38,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import android.media.AudioManager
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import kotlin.math.roundToInt
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import android.os.Build
 import androidx.compose.ui.text.style.TextOverflow
@@ -97,7 +104,117 @@ data class SubtitleTrackOption(
 )
 
 enum class VideoResizeMode {
-    FIT, CROP, FILL
+    FIT, FIXED_WIDTH, FILL, ZOOM
+}
+
+@OptIn(UnstableApi::class)
+private fun applyExoPlayerAspectRatio(
+    playerView: PlayerView,
+    exoPlayer: ExoPlayer?,
+    resizeMode: VideoResizeMode,
+    currentVideoSize: androidx.media3.common.VideoSize?
+) {
+    val contentFrame = playerView.findViewById<AspectRatioFrameLayout>(androidx.media3.ui.R.id.exo_content_frame)
+        ?: (0 until playerView.childCount).map { playerView.getChildAt(it) }.filterIsInstance<AspectRatioFrameLayout>().firstOrNull()
+
+    val vs = exoPlayer?.videoSize ?: currentVideoSize
+    val rawStreamRatio = if (vs != null && vs.height > 0 && vs.width > 0) {
+        val pr = if (vs.pixelWidthHeightRatio > 0f) vs.pixelWidthHeightRatio else 1f
+        (vs.width.toFloat() * pr) / vs.height.toFloat()
+    } else {
+        16f / 9f
+    }
+
+    when (resizeMode) {
+        VideoResizeMode.FIT -> {
+            playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            contentFrame?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+            contentFrame?.setAspectRatio(rawStreamRatio)
+            exoPlayer?.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        }
+        VideoResizeMode.FIXED_WIDTH -> {
+            playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+            contentFrame?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIXED_WIDTH
+            contentFrame?.setAspectRatio(16f / 9f)
+            exoPlayer?.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        }
+        VideoResizeMode.FILL -> {
+            playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+            contentFrame?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FILL
+            contentFrame?.setAspectRatio(0f)
+            exoPlayer?.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT
+        }
+        VideoResizeMode.ZOOM -> {
+            playerView.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            contentFrame?.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+            contentFrame?.setAspectRatio(rawStreamRatio)
+            exoPlayer?.videoScalingMode = C.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+        }
+    }
+
+    contentFrame?.requestLayout()
+    contentFrame?.invalidate()
+    playerView.videoSurfaceView?.requestLayout()
+    playerView.videoSurfaceView?.invalidate()
+    playerView.requestLayout()
+    playerView.invalidate()
+    playerView.post {
+        contentFrame?.requestLayout()
+        playerView.requestLayout()
+    }
+}
+
+private fun getIframeScalingJs(resizeMode: VideoResizeMode): String {
+    return when (resizeMode) {
+        VideoResizeMode.FIT -> """
+            (function() {
+                var els = document.querySelectorAll('video, iframe');
+                els.forEach(function(el) {
+                    el.style.objectFit = 'contain';
+                    el.style.aspectRatio = 'unset';
+                    el.style.width = '100vw';
+                    el.style.height = '100vh';
+                    el.style.transform = 'none';
+                });
+            })();
+        """.trimIndent()
+        VideoResizeMode.FIXED_WIDTH -> """
+            (function() {
+                var els = document.querySelectorAll('video, iframe');
+                els.forEach(function(el) {
+                    el.style.objectFit = 'contain';
+                    el.style.aspectRatio = '16/9';
+                    el.style.width = '100vw';
+                    el.style.height = '100vh';
+                    el.style.transform = 'none';
+                });
+            })();
+        """.trimIndent()
+        VideoResizeMode.FILL -> """
+            (function() {
+                var els = document.querySelectorAll('video, iframe');
+                els.forEach(function(el) {
+                    el.style.objectFit = 'fill';
+                    el.style.aspectRatio = 'unset';
+                    el.style.width = '100vw';
+                    el.style.height = '100vh';
+                    el.style.transform = 'none';
+                });
+            })();
+        """.trimIndent()
+        VideoResizeMode.ZOOM -> """
+            (function() {
+                var els = document.querySelectorAll('video, iframe');
+                els.forEach(function(el) {
+                    el.style.objectFit = 'cover';
+                    el.style.aspectRatio = 'unset';
+                    el.style.width = '100vw';
+                    el.style.height = '100vh';
+                    el.style.transform = 'scale(1.2)';
+                });
+            })();
+        """.trimIndent()
+    }
 }
 
 @OptIn(UnstableApi::class)
@@ -111,13 +228,16 @@ fun CinePlayerView(
     origin: String? = null,
     title: String = "",
     subtitle: String = "",
+    initialPositionMs: Long = 0L,
     isMiniPlayer: Boolean = false,
     isFullscreen: Boolean = false,
     isInPipMode: Boolean = false,
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
+    onEnterPipClick: () -> Unit = {},
     onCloseClick: () -> Unit = {},
+    onPlaybackProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     if (streamType.lowercase() == "iframe" || streamUrl.contains("pages.dev") || streamUrl.contains("<iframe")) {
@@ -131,6 +251,7 @@ fun CinePlayerView(
             onBackClick = onBackClick,
             onFullscreenToggle = onFullscreenToggle,
             onMiniPlayerToggle = onMiniPlayerToggle,
+            onEnterPipClick = onEnterPipClick,
             onCloseClick = onCloseClick,
             modifier = modifier
         )
@@ -144,13 +265,16 @@ fun CinePlayerView(
             origin = origin,
             title = title,
             subtitle = subtitle,
+            initialPositionMs = initialPositionMs,
             isMiniPlayer = isMiniPlayer,
             isFullscreen = isFullscreen,
             isInPipMode = isInPipMode,
             onBackClick = onBackClick,
             onFullscreenToggle = onFullscreenToggle,
             onMiniPlayerToggle = onMiniPlayerToggle,
+            onEnterPipClick = onEnterPipClick,
             onCloseClick = onCloseClick,
+            onPlaybackProgress = onPlaybackProgress,
             modifier = modifier
         )
     }
@@ -167,13 +291,16 @@ fun ExoStreamPlayer(
     origin: String?,
     title: String,
     subtitle: String,
+    initialPositionMs: Long = 0L,
     isMiniPlayer: Boolean = false,
     isFullscreen: Boolean = false,
     isInPipMode: Boolean = false,
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
+    onEnterPipClick: () -> Unit = {},
     onCloseClick: () -> Unit = {},
+    onPlaybackProgress: (positionMs: Long, durationMs: Long) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -182,11 +309,52 @@ fun ExoStreamPlayer(
     var isPlaying by remember { mutableStateOf(true) }
     var isMuted by remember { mutableStateOf(false) }
     var resizeMode by remember { mutableStateOf(VideoResizeMode.FIT) }
+    var aspectToastText by remember { mutableStateOf<String?>(null) }
+    var currentVideoSize by remember { mutableStateOf<androidx.media3.common.VideoSize?>(null) }
+    var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
+    var isScreenLocked by remember { mutableStateOf(false) }
+    var showLockOverlay by remember { mutableStateOf(false) }
     var showControls by remember { mutableStateOf(true) }
     var isBuffering by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+
+    val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
+    var brightnessLevel by remember {
+        val b = activity?.window?.attributes?.screenBrightness ?: -1f
+        mutableFloatStateOf(if (b >= 0f) b else 0.5f)
+    }
+    var volumeLevel by remember {
+        val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 8
+        val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+        mutableFloatStateOf(curVol.toFloat() / maxVol.toFloat())
+    }
+    var showBrightnessHUD by remember { mutableStateOf(false) }
+    var showVolumeHUD by remember { mutableStateOf(false) }
+    var isDraggingBrightness by remember { mutableStateOf(false) }
+    var isDraggingVolume by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showBrightnessHUD, isDraggingBrightness) {
+        if (showBrightnessHUD && !isDraggingBrightness) {
+            delay(1200L)
+            showBrightnessHUD = false
+        }
+    }
+
+    LaunchedEffect(showVolumeHUD, isDraggingVolume) {
+        if (showVolumeHUD && !isDraggingVolume) {
+            delay(1200L)
+            showVolumeHUD = false
+        }
+    }
+
+    LaunchedEffect(aspectToastText) {
+        if (aspectToastText != null) {
+            kotlinx.coroutines.delay(1500L)
+            aspectToastText = null
+        }
+    }
 
     // Keep mobile screen awake during video playback (prevent screen lock / display sleep timeout)
     DisposableEffect(isPlaying) {
@@ -209,9 +377,28 @@ fun ExoStreamPlayer(
         }
     }
 
+    // Auto hide lock overlay when screen is locked after 2.5 seconds
+    LaunchedEffect(showLockOverlay, isScreenLocked) {
+        if (showLockOverlay && isScreenLocked) {
+            kotlinx.coroutines.delay(2500L)
+            showLockOverlay = false
+        }
+    }
+
+    // Auto unlock if exiting landscape / fullscreen mode
+    LaunchedEffect(isFullscreen) {
+        if (!isFullscreen) {
+            isScreenLocked = false
+            showLockOverlay = false
+        }
+    }
+
     var qualityOptions by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
     var selectedQualityLabel by remember { mutableStateOf("Auto") }
     var showQualityDialog by remember { mutableStateOf(false) }
+
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+    var showSpeedDialog by remember { mutableStateOf(false) }
 
     var audioTrackOptions by remember { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
     var selectedAudioLabel by remember { mutableStateOf("Default / Auto") }
@@ -392,12 +579,21 @@ fun ExoStreamPlayer(
                 .setAudioAttributes(audioAttrs, true)
                 .build().apply {
                     setMediaSource(mediaSource)
+                    if (initialPositionMs > 0L) {
+                        seekTo(initialPositionMs)
+                    }
                     prepare()
                     playWhenReady = true
                 }
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        }
+    }
+
+    LaunchedEffect(resizeMode, currentVideoSize, isFullscreen, exoPlayer) {
+        playerViewRef?.let { pv ->
+            applyExoPlayerAspectRatio(pv, exoPlayer, resizeMode, currentVideoSize)
         }
     }
 
@@ -420,6 +616,10 @@ fun ExoStreamPlayer(
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 isBuffering = false
                 errorMessage = "Playback Error: ${error.localizedMessage ?: "Stream unavailable or network issue"}"
+            }
+
+            override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
+                currentVideoSize = videoSize
             }
 
             override fun onTracksChanged(tracks: Tracks) {
@@ -494,6 +694,9 @@ fun ExoStreamPlayer(
         player.addListener(listener)
 
         onDispose {
+            if (currentPosition > 1000L) {
+                onPlaybackProgress(currentPosition, duration)
+            }
             player.removeListener(listener)
             player.release()
         }
@@ -510,6 +713,7 @@ fun ExoStreamPlayer(
     // Position tracker coroutine
     LaunchedEffect(exoPlayer) {
         val player = exoPlayer ?: return@LaunchedEffect
+        var tickCounter = 0
         while (true) {
             val rawDur = player.duration
             val validDur = if (rawDur != C.TIME_UNSET && rawDur > 0) rawDur else 0L
@@ -517,6 +721,11 @@ fun ExoStreamPlayer(
 
             duration = validDur
             currentPosition = if (duration > 0) p.coerceIn(0L, duration) else p
+
+            tickCounter++
+            if (tickCounter % 4 == 0 && currentPosition > 1000L) {
+                onPlaybackProgress(currentPosition, duration)
+            }
             delay(500)
         }
     }
@@ -583,36 +792,48 @@ fun ExoStreamPlayer(
                             modifier = Modifier
                                 .weight(1f)
                                 .padding(end = 4.dp)
+                                .clickable { onMiniPlayerToggle(true) }
                         )
-                        IconButton(
-                            onClick = onCloseClick,
+                        Box(
                             modifier = Modifier
-                                .size(24.dp)
-                                .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.75f))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onCloseClick
+                                ),
+                            contentAlignment = Alignment.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Close,
                                 contentDescription = "Close",
                                 tint = Color.White,
-                                modifier = Modifier.size(14.dp)
+                                modifier = Modifier.size(16.dp)
                             )
                         }
                     }
 
-                    IconButton(
-                        onClick = {
-                            if (isPlaying) {
-                                exoPlayer?.pause()
-                                isPlaying = false
-                            } else {
-                                exoPlayer?.play()
-                                isPlaying = true
-                            }
-                        },
+                    Box(
                         modifier = Modifier
                             .align(Alignment.Center)
-                            .size(36.dp)
-                            .background(Color(0xFF2B62F6), CircleShape)
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF2B62F6))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) {
+                                if (isPlaying) {
+                                    exoPlayer?.pause()
+                                    isPlaying = false
+                                } else {
+                                    exoPlayer?.play()
+                                    isPlaying = true
+                                }
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
                         if (isBuffering) {
                             CircularProgressIndicator(
@@ -625,23 +846,49 @@ fun ExoStreamPlayer(
                                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                                 contentDescription = if (isPlaying) "Pause" else "Play",
                                 tint = Color.White,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(22.dp)
                             )
                         }
                     }
 
-                    IconButton(
-                        onClick = { onMiniPlayerToggle(true) },
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onEnterPipClick
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PictureInPictureAlt,
+                            contentDescription = "System PiP",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    Box(
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
-                            .size(26.dp)
-                            .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { onMiniPlayerToggle(true) },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.Fullscreen,
                             contentDescription = "Expand",
                             tint = Color.White,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
@@ -649,16 +896,77 @@ fun ExoStreamPlayer(
         }
     } else {
         Box(
-            modifier = modifier
-                .fillMaxWidth()
-                .then(if (isFullscreen) Modifier.fillMaxHeight() else Modifier.aspectRatio(16f / 9f))
+            modifier = (if (isFullscreen) modifier.fillMaxSize() else modifier.fillMaxWidth())
                 .background(Color.Black)
-                .pointerInput(exoPlayer) {
+                .pointerInput(isScreenLocked, isFullscreen) {
+                    if (isScreenLocked) return@pointerInput
+                    detectVerticalDragGestures(
+                        onDragStart = { offset ->
+                            val isLeft = offset.x < size.width * 0.5f
+                            if (isLeft) {
+                                isDraggingBrightness = true
+                                isDraggingVolume = false
+                                showBrightnessHUD = true
+                                showVolumeHUD = false
+                                val currentB = activity?.window?.attributes?.screenBrightness ?: -1f
+                                brightnessLevel = if (currentB >= 0f) currentB else 0.5f
+                            } else {
+                                isDraggingBrightness = false
+                                isDraggingVolume = true
+                                showVolumeHUD = true
+                                showBrightnessHUD = false
+                                val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+                                val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+                                volumeLevel = curVol.toFloat() / maxVol.toFloat()
+                            }
+                        },
+                        onVerticalDrag = { change, dragAmount ->
+                            change.consume()
+                            val totalHeight = size.height.toFloat().coerceAtLeast(100f)
+                            val delta = -dragAmount / (totalHeight * 0.7f)
+
+                            if (isDraggingBrightness) {
+                                brightnessLevel = (brightnessLevel + delta).coerceIn(0.01f, 1.0f)
+                                activity?.let { act ->
+                                    val lp = act.window.attributes
+                                    lp.screenBrightness = brightnessLevel
+                                    act.window.attributes = lp
+                                }
+                                showBrightnessHUD = true
+                            } else if (isDraggingVolume) {
+                                volumeLevel = (volumeLevel + delta).coerceIn(0f, 1f)
+                                val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+                                val targetVol = (volumeLevel * maxVol).roundToInt().coerceIn(0, maxVol)
+                                audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                                exoPlayer?.volume = if (targetVol == 0) 0f else 1f
+                                isMuted = (targetVol == 0)
+                                showVolumeHUD = true
+                            }
+                        },
+                        onDragEnd = {
+                            isDraggingBrightness = false
+                            isDraggingVolume = false
+                        },
+                        onDragCancel = {
+                            isDraggingBrightness = false
+                            isDraggingVolume = false
+                        }
+                    )
+                }
+                .pointerInput(exoPlayer, isFullscreen, isScreenLocked) {
                     detectTapGestures(
                         onTap = {
-                            showControls = !showControls
+                            if (isScreenLocked) {
+                                showLockOverlay = !showLockOverlay
+                            } else {
+                                showControls = !showControls
+                            }
                         },
                         onDoubleTap = { offset ->
+                            if (isScreenLocked) {
+                                showLockOverlay = true
+                                return@detectTapGestures
+                            }
                             val w = size.width
                             val x = offset.x
                             val player = exoPlayer
@@ -696,24 +1004,32 @@ fun ExoStreamPlayer(
                         useController = false
                         player = exoPlayer
                         keepScreenOn = true
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        setShutterBackgroundColor(android.graphics.Color.BLACK)
                         layoutParams = FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT
                         )
-                        this.resizeMode = when (resizeMode) {
-                            VideoResizeMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                            VideoResizeMode.CROP -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                            VideoResizeMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+
+                        applyExoPlayerAspectRatio(this, exoPlayer, resizeMode, currentVideoSize)
+
+                        subtitleView?.let { subView ->
+                            subView.setUserDefaultStyle()
+                            subView.setUserDefaultTextSize()
                         }
+                        playerViewRef = this
                     }
                 },
                 update = { playerView ->
+                    playerViewRef = playerView
                     playerView.player = exoPlayer
                     playerView.keepScreenOn = isPlaying
-                    playerView.resizeMode = when (resizeMode) {
-                        VideoResizeMode.FIT -> AspectRatioFrameLayout.RESIZE_MODE_FIT
-                        VideoResizeMode.CROP -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
-                        VideoResizeMode.FILL -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+
+                    applyExoPlayerAspectRatio(playerView, exoPlayer, resizeMode, currentVideoSize)
+
+                    playerView.subtitleView?.let { subView ->
+                        subView.setUserDefaultStyle()
+                        subView.setUserDefaultTextSize()
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -728,110 +1044,52 @@ fun ExoStreamPlayer(
                 )
             }
 
-            val isPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
+            val isSystemPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
 
-            // Custom Overlay Controls
+            // Brightness HUD Indicator Overlay (Left side)
             AnimatedVisibility(
-                visible = showControls,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.fillMaxSize()
+                visible = showBrightnessHUD && !isSystemPip,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = if (isFullscreen) 48.dp else 24.dp)
             ) {
-                if (isPip) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.5f))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) {
-                                showControls = false
-                            }
-                    ) {
-                        // Close Button at Top-Right
-                        IconButton(
-                            onClick = { onCloseClick() },
-                            modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp)
-                                .size(30.dp)
-                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close Video",
-                                tint = Color.White,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
+                GestureLevelIndicator(
+                    icon = if (brightnessLevel > 0.65f) Icons.Default.BrightnessHigh
+                           else if (brightnessLevel > 0.3f) Icons.Default.BrightnessMedium
+                           else Icons.Default.BrightnessLow,
+                    label = "Brightness",
+                    level = brightnessLevel
+                )
+            }
 
-                        // Center Expand / Open Full Screen Button
-                        IconButton(
-                            onClick = {
-                                try {
-                                    val intent = Intent(context, activity?.javaClass ?: context.javaClass).apply {
-                                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                                        action = Intent.ACTION_MAIN
-                                        addCategory(Intent.CATEGORY_LAUNCHER)
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                                onMiniPlayerToggle(false)
-                                onFullscreenToggle(true)
-                            },
-                            modifier = Modifier
-                                .align(Alignment.Center)
-                                .size(46.dp)
-                                .background(Color(0xFF2B62F6), CircleShape)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Fullscreen,
-                                contentDescription = "Expand Full Screen",
-                                tint = Color.White,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
+            // Volume HUD Indicator Overlay (Right side)
+            AnimatedVisibility(
+                visible = showVolumeHUD && !isSystemPip,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = if (isFullscreen) 48.dp else 24.dp)
+            ) {
+                GestureLevelIndicator(
+                    icon = if (volumeLevel <= 0.01f || isMuted) Icons.Default.VolumeOff
+                           else if (volumeLevel > 0.5f) Icons.Default.VolumeUp
+                           else Icons.Default.VolumeDown,
+                    label = "Volume",
+                    level = if (isMuted) 0f else volumeLevel
+                )
+            }
 
-                        // Center Bottom Play / Pause Button
-                        IconButton(
-                            onClick = {
-                                val player = exoPlayer
-                                if (player != null) {
-                                    if (isPlaying) {
-                                        player.pause()
-                                        isPlaying = false
-                                    } else {
-                                        player.play()
-                                        isPlaying = true
-                                    }
-                                }
-                            },
-                            modifier = Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 8.dp)
-                                .size(36.dp)
-                                .background(Color.Black.copy(alpha = 0.75f), CircleShape)
-                        ) {
-                            if (isBuffering) {
-                                CircularProgressIndicator(
-                                    color = Color.White,
-                                    strokeWidth = 2.dp,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (isPlaying) "Pause" else "Play",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-                    }
-                } else {
+            // Custom Overlay Controls (Hidden during System Picture-in-Picture)
+            if (!isSystemPip) {
+                AnimatedVisibility(
+                    visible = showControls && !isScreenLocked,
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                    modifier = Modifier.fillMaxSize()
+                ) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -852,6 +1110,45 @@ fun ExoStreamPlayer(
                             }
                             .padding(12.dp)
                     ) {
+                        // Aspect Ratio Toast HUD
+                        AnimatedVisibility(
+                            visible = aspectToastText != null,
+                            enter = fadeIn() + scaleIn(),
+                            exit = fadeOut() + scaleOut(),
+                            modifier = Modifier.align(Alignment.Center)
+                        ) {
+                            Surface(
+                                color = Color.Black.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(12.dp),
+                                border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                                ) {
+                                    val (badgeIcon, badgeColor) = when (resizeMode) {
+                                        VideoResizeMode.FIT -> Pair(Icons.Default.FitScreen, Color(0xFF00E5FF))
+                                        VideoResizeMode.FIXED_WIDTH -> Pair(Icons.Default.Tv, Color(0xFF2B62F6))
+                                        VideoResizeMode.FILL -> Pair(Icons.Default.Fullscreen, Color(0xFF4CAF50))
+                                        VideoResizeMode.ZOOM -> Pair(Icons.Default.Crop, Color(0xFFFF9800))
+                                    }
+                                    Icon(
+                                        imageVector = badgeIcon,
+                                        contentDescription = null,
+                                        tint = badgeColor,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = aspectToastText ?: "",
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+
                         // Top Header Row
                         Row(
                             modifier = Modifier
@@ -927,9 +1224,10 @@ fun ExoStreamPlayer(
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Translate,
+                                    painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_audiotrack),
                                     contentDescription = "Language",
-                                    tint = if (selectedAudioLabel != "Default / Auto") Color(0xFF00E5FF) else Color.White
+                                    tint = if (selectedAudioLabel != "Default / Auto") Color(0xFF00E5FF) else Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
 
@@ -938,9 +1236,10 @@ fun ExoStreamPlayer(
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.Tune,
+                                    painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_settings),
                                     contentDescription = "Tune",
-                                    tint = if (selectedQualityLabel != "Auto") Color(0xFF00E5FF) else Color.White
+                                    tint = if (selectedQualityLabel != "Auto") Color(0xFF00E5FF) else Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
                             }
 
@@ -949,10 +1248,35 @@ fun ExoStreamPlayer(
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.ClosedCaption,
+                                    painter = painterResource(
+                                        if (selectedSubtitleLabel != "Off") androidx.media3.ui.R.drawable.exo_styled_controls_subtitle_on
+                                        else androidx.media3.ui.R.drawable.exo_styled_controls_subtitle_off
+                                    ),
                                     contentDescription = "CC",
-                                    tint = if (selectedSubtitleLabel != "Off") Color(0xFF00E5FF) else Color.White
+                                    tint = if (selectedSubtitleLabel != "Off") Color(0xFF00E5FF) else Color.White,
+                                    modifier = Modifier.size(22.dp)
                                 )
+                            }
+
+                            // Lock screen toggle in Landscape mode (right of caption / CC button)
+                            if (isFullscreen) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = {
+                                        isScreenLocked = true
+                                        showControls = false
+                                        showLockOverlay = true
+                                        aspectToastText = "Screen Locked"
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Lock,
+                                        contentDescription = "Lock Screen",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -972,14 +1296,14 @@ fun ExoStreamPlayer(
                                     }
                                 },
                                 modifier = Modifier
-                                    .size(44.dp)
+                                    .size(48.dp)
                                     .background(Color.White.copy(alpha = 0.2f), CircleShape)
                             ) {
                                 Icon(
-                                    Icons.Default.Replay10,
+                                    painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_rewind),
                                     contentDescription = "-10s",
                                     tint = Color.White,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(26.dp)
                                 )
                             }
 
@@ -1007,10 +1331,13 @@ fun ExoStreamPlayer(
                                     )
                                 } else {
                                     Icon(
-                                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                        painter = painterResource(
+                                            if (isPlaying) androidx.media3.ui.R.drawable.exo_styled_controls_pause
+                                            else androidx.media3.ui.R.drawable.exo_styled_controls_play
+                                        ),
                                         contentDescription = if (isPlaying) "Pause" else "Play",
                                         tint = Color.White,
-                                        modifier = Modifier.size(36.dp)
+                                        modifier = Modifier.size(32.dp)
                                     )
                                 }
                             }
@@ -1024,7 +1351,7 @@ fun ExoStreamPlayer(
                                         val rawDur = player.duration
                                         val validDur = if (rawDur != C.TIME_UNSET && rawDur > 0) rawDur else duration
                                         val target = if (validDur > 0) {
-                                            (player.currentPosition + 10000L).coerceAtMost(validDur)
+                                             (player.currentPosition + 10000L).coerceAtMost(validDur)
                                         } else {
                                             player.currentPosition + 10000L
                                         }
@@ -1033,14 +1360,14 @@ fun ExoStreamPlayer(
                                     }
                                 },
                                 modifier = Modifier
-                                    .size(44.dp)
+                                    .size(48.dp)
                                     .background(Color.White.copy(alpha = 0.2f), CircleShape)
                             ) {
                                 Icon(
-                                    Icons.Default.Forward10,
+                                    painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_fastforward),
                                     contentDescription = "+10s",
                                     tint = Color.White,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(26.dp)
                                 )
                             }
                         }
@@ -1120,19 +1447,83 @@ fun ExoStreamPlayer(
 
                                     Spacer(modifier = Modifier.width(6.dp))
 
+                                    // Playback Speed Button (between Quality and Aspect Ratio)
+                                    Surface(
+                                        color = Color.White.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(8.dp),
+                                        modifier = Modifier.clickable { showSpeedDialog = true }
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Speed,
+                                                contentDescription = "Playback Speed",
+                                                tint = Color.White,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(3.dp))
+                                            Text(
+                                                text = if (playbackSpeed == 1.0f) "1x" else "${playbackSpeed}x",
+                                                color = Color.White,
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    val (aspectIcon, aspectLabel) = when (resizeMode) {
+                                        VideoResizeMode.FIT -> Pair(Icons.Default.FitScreen, "Fit")
+                                        VideoResizeMode.FIXED_WIDTH -> Pair(Icons.Default.Tv, "16:9")
+                                        VideoResizeMode.FILL -> Pair(Icons.Default.Fullscreen, "Fill")
+                                        VideoResizeMode.ZOOM -> Pair(Icons.Default.Crop, "Zoom")
+                                    }
+
                                     IconButton(
                                         onClick = {
                                             resizeMode = when (resizeMode) {
-                                                VideoResizeMode.FIT -> VideoResizeMode.CROP
-                                                VideoResizeMode.CROP -> VideoResizeMode.FILL
-                                                VideoResizeMode.FILL -> VideoResizeMode.FIT
+                                                VideoResizeMode.FIT -> {
+                                                    aspectToastText = "Aspect: 16:9"
+                                                    VideoResizeMode.FIXED_WIDTH
+                                                }
+                                                VideoResizeMode.FIXED_WIDTH -> {
+                                                    aspectToastText = "Aspect: Fill"
+                                                    VideoResizeMode.FILL
+                                                }
+                                                VideoResizeMode.FILL -> {
+                                                    aspectToastText = "Aspect: Zoom"
+                                                    VideoResizeMode.ZOOM
+                                                }
+                                                VideoResizeMode.ZOOM -> {
+                                                    aspectToastText = "Aspect: Fit"
+                                                    VideoResizeMode.FIT
+                                                }
                                             }
                                         },
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
-                                            imageVector = Icons.Default.AspectRatio,
-                                            contentDescription = "Aspect Ratio",
+                                            imageVector = aspectIcon,
+                                            contentDescription = "Aspect Ratio: $aspectLabel",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    IconButton(
+                                        onClick = {
+                                            onEnterPipClick()
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.PictureInPictureAlt,
+                                            contentDescription = "Picture in Picture",
                                             tint = Color.White
                                         )
                                     }
@@ -1144,13 +1535,103 @@ fun ExoStreamPlayer(
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
-                                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
+                                            painter = painterResource(
+                                                if (isFullscreen) androidx.media3.ui.R.drawable.exo_styled_controls_fullscreen_exit
+                                                else androidx.media3.ui.R.drawable.exo_styled_controls_fullscreen_enter
+                                            ),
                                             contentDescription = "Fullscreen",
-                                            tint = Color.White
+                                            tint = Color.White,
+                                            modifier = Modifier.size(20.dp)
                                         )
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Lock Screen UI Overlay (when screen is locked in landscape mode)
+            AnimatedVisibility(
+                visible = isScreenLocked && showLockOverlay,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.4f))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            showLockOverlay = false
+                        }
+                        .padding(16.dp)
+                ) {
+                    // Floating Unlock Button on the left side
+                    Surface(
+                        color = Color(0xFF131B2E).copy(alpha = 0.92f),
+                        shape = RoundedCornerShape(24.dp),
+                        border = BorderStroke(1.5.dp, Color(0xFF00E5FF)),
+                        shadowElevation = 8.dp,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .padding(start = 8.dp)
+                            .clickable {
+                                isScreenLocked = false
+                                showLockOverlay = false
+                                showControls = true
+                                aspectToastText = "Screen Unlocked"
+                            }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LockOpen,
+                                contentDescription = "Unlock Screen",
+                                tint = Color(0xFF00E5FF),
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Text(
+                                text = "Tap to Unlock",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+
+                    // Top notification badge indicating screen is locked
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.8f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .padding(top = 8.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = null,
+                                tint = Color(0xFFFF9800),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Screen Locked — Accidental touches blocked",
+                                color = Color.White,
+                                fontWeight = FontWeight.Medium,
+                                fontSize = 12.sp
+                            )
                         }
                     }
                 }
@@ -1228,6 +1709,74 @@ fun ExoStreamPlayer(
             },
             confirmButton = {
                 TextButton(onClick = { showQualityDialog = false }) {
+                    Text("Close", color = Color(0xFF2B62F6))
+                }
+            },
+            containerColor = Color(0xFF131B2E),
+            titleContentColor = Color.White,
+            textContentColor = Color.White
+        )
+    }
+
+    if (showSpeedDialog) {
+        val speedOptions = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+        AlertDialog(
+            onDismissRequest = { showSpeedDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Speed,
+                        contentDescription = null,
+                        tint = Color(0xFF00E5FF),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Playback Speed",
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    speedOptions.forEach { speed ->
+                        val isSelected = playbackSpeed == speed
+                        val label = if (speed == 1.0f) "1.0x (Normal)" else "${speed}x"
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    playbackSpeed = speed
+                                    exoPlayer?.setPlaybackSpeed(speed)
+                                    aspectToastText = "Speed: ${speed}x"
+                                    showSpeedDialog = false
+                                }
+                                .padding(vertical = 12.dp, horizontal = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (isSelected) Color(0xFF00E5FF) else Color.White,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                fontSize = 14.sp
+                            )
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = "Selected",
+                                    tint = Color(0xFF00E5FF),
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSpeedDialog = false }) {
                     Text("Close", color = Color(0xFF2B62F6))
                 }
             },
@@ -1348,13 +1897,14 @@ fun ExoStreamPlayer(
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    val captionsToShow = if (subtitleTrackOptions.size > 1) {
-                        subtitleTrackOptions
-                    } else {
-                        listOf(
-                            SubtitleTrackOption("Off", "off", null, -1, isOff = true),
-                            SubtitleTrackOption("English Captions", "en", null, -1, isOff = false),
-                            SubtitleTrackOption("Hindi Captions", "hi", null, -1, isOff = false)
+                    val captionsToShow = subtitleTrackOptions
+
+                    if (captionsToShow.size <= 1) {
+                        Text(
+                            text = "No additional captions/subtitles available in this stream.",
+                            color = Color.Gray,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp)
                         )
                     }
 
@@ -1369,26 +1919,25 @@ fun ExoStreamPlayer(
 
                                     val player = exoPlayer
                                     if (player != null) {
+                                        val builder = player.trackSelectionParameters.buildUpon()
                                         if (option.isOff) {
-                                            player.trackSelectionParameters = player.trackSelectionParameters
-                                                .buildUpon()
-                                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                                                .build()
+                                            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                            selectedSubtitleLabel = "Off"
                                         } else {
+                                            builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                                             if (option.group != null) {
                                                 val override = TrackSelectionOverride(option.group.mediaTrackGroup, option.trackIndex)
-                                                player.trackSelectionParameters = player.trackSelectionParameters
-                                                    .buildUpon()
-                                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                                    .setOverrideForType(override)
-                                                    .build()
+                                                builder.setOverrideForType(override)
+                                                selectedSubtitleLabel = option.label
+                                            } else if (option.language == "auto") {
+                                                builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                                                selectedSubtitleLabel = "Auto"
                                             } else {
-                                                player.trackSelectionParameters = player.trackSelectionParameters
-                                                    .buildUpon()
-                                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-                                                    .build()
+                                                builder.setPreferredTextLanguage(option.language)
+                                                selectedSubtitleLabel = option.label
                                             }
                                         }
+                                        player.trackSelectionParameters = builder.build()
                                     }
                                 }
                                 .padding(vertical = 12.dp, horizontal = 8.dp),
@@ -1437,6 +1986,7 @@ fun IframeStreamPlayer(
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
+    onEnterPipClick: () -> Unit = {},
     onCloseClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -1444,11 +1994,44 @@ fun IframeStreamPlayer(
     val activity = context as? Activity
     val isPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
     var showIframeControls by remember { mutableStateOf(true) }
+    var resizeMode by remember { mutableStateOf(VideoResizeMode.FIT) }
+    var aspectToastText by remember { mutableStateOf<String?>(null) }
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    var isScreenLocked by remember { mutableStateOf(false) }
+    var showLockOverlay by remember { mutableStateOf(false) }
+
+    LaunchedEffect(resizeMode, isFullscreen) {
+        val js = getIframeScalingJs(resizeMode)
+        webViewRef?.evaluateJavascript(js, null)
+    }
+
+    LaunchedEffect(aspectToastText) {
+        if (aspectToastText != null) {
+            delay(1500L)
+            aspectToastText = null
+        }
+    }
 
     LaunchedEffect(showIframeControls, isPip) {
         if (isPip && showIframeControls) {
             delay(3000)
             showIframeControls = false
+        }
+    }
+
+    // Auto hide lock overlay when screen is locked after 2.5 seconds
+    LaunchedEffect(showLockOverlay, isScreenLocked) {
+        if (showLockOverlay && isScreenLocked) {
+            delay(2500L)
+            showLockOverlay = false
+        }
+    }
+
+    // Auto unlock if exiting landscape / fullscreen mode
+    LaunchedEffect(isFullscreen) {
+        if (!isFullscreen) {
+            isScreenLocked = false
+            showLockOverlay = false
         }
     }
 
@@ -1461,8 +2044,40 @@ fun IframeStreamPlayer(
         }
     }
 
+    val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
+    var brightnessLevel by remember {
+        val b = activity?.window?.attributes?.screenBrightness ?: -1f
+        mutableFloatStateOf(if (b >= 0f) b else 0.5f)
+    }
+    var volumeLevel by remember {
+        val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 8
+        val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+        mutableFloatStateOf(curVol.toFloat() / maxVol.toFloat())
+    }
+    var showBrightnessHUD by remember { mutableStateOf(false) }
+    var showVolumeHUD by remember { mutableStateOf(false) }
+    var isDraggingBrightness by remember { mutableStateOf(false) }
+    var isDraggingVolume by remember { mutableStateOf(false) }
+
+    LaunchedEffect(showBrightnessHUD, isDraggingBrightness) {
+        if (showBrightnessHUD && !isDraggingBrightness) {
+            delay(1200L)
+            showBrightnessHUD = false
+        }
+    }
+
+    LaunchedEffect(showVolumeHUD, isDraggingVolume) {
+        if (showVolumeHUD && !isDraggingVolume) {
+            delay(1200L)
+            showVolumeHUD = false
+        }
+    }
+
     var customView by remember { mutableStateOf<View?>(null) }
     var customViewCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    var webViewInstance by remember { mutableStateOf<WebView?>(null) }
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+    var showSpeedDialog by remember { mutableStateOf(false) }
 
     val activeCustomView = customView
     if (activeCustomView != null) {
@@ -1550,32 +2165,107 @@ fun IframeStreamPlayer(
                     modifier = Modifier.fillMaxSize()
                 )
 
-                Row(
+                // Mini Player Overlay Controls
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .background(Color.Black.copy(alpha = 0.6f))
-                        .padding(4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Black.copy(alpha = 0.65f),
+                                    Color.Transparent,
+                                    Color.Black.copy(alpha = 0.75f)
+                                )
+                            )
+                        )
+                        .padding(6.dp)
                 ) {
-                    Text(
-                        text = title.ifEmpty { "Iframe Stream" },
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = onCloseClick, modifier = Modifier.size(22.dp)) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White, modifier = Modifier.size(14.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = title.ifEmpty { "Iframe Stream" },
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 4.dp)
+                                .clickable { onMiniPlayerToggle(true) }
+                        )
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .clip(CircleShape)
+                                .background(Color.Black.copy(alpha = 0.75f))
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                    onClick = onCloseClick
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomStart)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = onEnterPipClick
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.PictureInPictureAlt,
+                            contentDescription = "System PiP",
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.75f))
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null
+                            ) { onMiniPlayerToggle(true) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Fullscreen,
+                            contentDescription = "Expand",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
             }
         }
     } else {
         Box(
-            modifier = if (isFullscreen) {
+            modifier = (if (isFullscreen) {
                 modifier
                     .fillMaxSize()
                     .background(Color.Black)
@@ -1584,6 +2274,59 @@ fun IframeStreamPlayer(
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f)
                     .background(Color.Black)
+            })
+            .pointerInput(isScreenLocked, isFullscreen) {
+                if (isScreenLocked) return@pointerInput
+                detectVerticalDragGestures(
+                    onDragStart = { offset ->
+                        val isLeft = offset.x < size.width * 0.5f
+                        if (isLeft) {
+                            isDraggingBrightness = true
+                            isDraggingVolume = false
+                            showBrightnessHUD = true
+                            showVolumeHUD = false
+                            val currentB = activity?.window?.attributes?.screenBrightness ?: -1f
+                            brightnessLevel = if (currentB >= 0f) currentB else 0.5f
+                        } else {
+                            isDraggingBrightness = false
+                            isDraggingVolume = true
+                            showVolumeHUD = true
+                            showBrightnessHUD = false
+                            val curVol = audioManager?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+                            val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+                            volumeLevel = curVol.toFloat() / maxVol.toFloat()
+                        }
+                    },
+                    onVerticalDrag = { change, dragAmount ->
+                        change.consume()
+                        val totalHeight = size.height.toFloat().coerceAtLeast(100f)
+                        val delta = -dragAmount / (totalHeight * 0.7f)
+
+                        if (isDraggingBrightness) {
+                            brightnessLevel = (brightnessLevel + delta).coerceIn(0.01f, 1.0f)
+                            activity?.let { act ->
+                                val lp = act.window.attributes
+                                lp.screenBrightness = brightnessLevel
+                                act.window.attributes = lp
+                            }
+                            showBrightnessHUD = true
+                        } else if (isDraggingVolume) {
+                            volumeLevel = (volumeLevel + delta).coerceIn(0f, 1f)
+                            val maxVol = (audioManager?.getStreamMaxVolume(AudioManager.STREAM_MUSIC) ?: 15).coerceAtLeast(1)
+                            val targetVol = (volumeLevel * maxVol).roundToInt().coerceIn(0, maxVol)
+                            audioManager?.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0)
+                            showVolumeHUD = true
+                        }
+                    },
+                    onDragEnd = {
+                        isDraggingBrightness = false
+                        isDraggingVolume = false
+                    },
+                    onDragCancel = {
+                        isDraggingBrightness = false
+                        isDraggingVolume = false
+                    }
+                )
             }
         ) {
             AndroidView(
@@ -1625,7 +2368,13 @@ fun IframeStreamPlayer(
                         } else {
                             loadUrl(url)
                         }
+                        webViewRef = this
                     }
+                },
+                update = { webView ->
+                    webViewRef = webView
+                    val js = getIframeScalingJs(resizeMode)
+                    webView.evaluateJavascript(js, null)
                 },
                 onRelease = { webView ->
                     try {
@@ -1641,129 +2390,393 @@ fun IframeStreamPlayer(
                 modifier = Modifier.fillMaxSize()
             )
 
-            if (isPip) {
+            val isSystemPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
+
+            // Brightness HUD Indicator Overlay (Left side)
+            AnimatedVisibility(
+                visible = showBrightnessHUD && !isSystemPip,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = if (isFullscreen) 48.dp else 24.dp)
+            ) {
+                GestureLevelIndicator(
+                    icon = if (brightnessLevel > 0.65f) Icons.Default.BrightnessHigh
+                           else if (brightnessLevel > 0.3f) Icons.Default.BrightnessMedium
+                           else Icons.Default.BrightnessLow,
+                    label = "Brightness",
+                    level = brightnessLevel
+                )
+            }
+
+            // Volume HUD Indicator Overlay (Right side)
+            AnimatedVisibility(
+                visible = showVolumeHUD && !isSystemPip,
+                enter = fadeIn() + scaleIn(),
+                exit = fadeOut() + scaleOut(),
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(end = if (isFullscreen) 48.dp else 24.dp)
+            ) {
+                GestureLevelIndicator(
+                    icon = if (volumeLevel <= 0.01f) Icons.Default.VolumeOff
+                           else if (volumeLevel > 0.5f) Icons.Default.VolumeUp
+                           else Icons.Default.VolumeDown,
+                    label = "Volume",
+                    level = volumeLevel
+                )
+            }
+
+            if (!isSystemPip) {
+                // Aspect Ratio Toast HUD
                 AnimatedVisibility(
-                    visible = showIframeControls,
-                    enter = fadeIn(),
-                    exit = fadeOut(),
+                    visible = aspectToastText != null,
+                    enter = fadeIn() + scaleIn(),
+                    exit = fadeOut() + scaleOut(),
+                    modifier = Modifier.align(Alignment.Center)
+                ) {
+                    Surface(
+                        color = Color.Black.copy(alpha = 0.85f),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.6f))
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp)
+                        ) {
+                            val (badgeIcon, badgeColor) = when (resizeMode) {
+                                VideoResizeMode.FIT -> Pair(Icons.Default.FitScreen, Color(0xFF00E5FF))
+                                VideoResizeMode.FIXED_WIDTH -> Pair(Icons.Default.Tv, Color(0xFF2B62F6))
+                                VideoResizeMode.FILL -> Pair(Icons.Default.Fullscreen, Color(0xFF4CAF50))
+                                VideoResizeMode.ZOOM -> Pair(Icons.Default.Crop, Color(0xFFFF9800))
+                            }
+                            Icon(
+                                imageVector = badgeIcon,
+                                contentDescription = null,
+                                tint = badgeColor,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = aspectToastText ?: "",
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                        }
+                    }
+                }
+
+                if (!isScreenLocked) {
+                    // Overlay Header for Back & Fullscreen Buttons
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.TopCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
+                                )
+                            )
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onBackClick,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
+                        }
+
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = title.ifEmpty { "Iframe Stream" },
+                                style = MaterialTheme.typography.titleMedium,
+                                color = Color.White,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                            if (subtitle.isNotEmpty()) {
+                                Text(
+                                    text = subtitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.LightGray,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        // Playback Speed Button
+                        Surface(
+                            color = Color.White.copy(alpha = 0.2f),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.clickable { showSpeedDialog = true }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Speed,
+                                    contentDescription = "Playback Speed",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(3.dp))
+                                Text(
+                                    text = if (playbackSpeed == 1.0f) "1x" else "${playbackSpeed}x",
+                                    color = Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        val (aspectIcon, aspectLabel) = when (resizeMode) {
+                            VideoResizeMode.FIT -> Pair(Icons.Default.FitScreen, "Fit")
+                            VideoResizeMode.FIXED_WIDTH -> Pair(Icons.Default.Tv, "16:9")
+                            VideoResizeMode.FILL -> Pair(Icons.Default.Fullscreen, "Fill")
+                            VideoResizeMode.ZOOM -> Pair(Icons.Default.Crop, "Zoom")
+                        }
+
+                        IconButton(
+                            onClick = {
+                                resizeMode = when (resizeMode) {
+                                    VideoResizeMode.FIT -> {
+                                        aspectToastText = "Aspect: 16:9"
+                                        VideoResizeMode.FIXED_WIDTH
+                                    }
+                                    VideoResizeMode.FIXED_WIDTH -> {
+                                        aspectToastText = "Aspect: Fill"
+                                        VideoResizeMode.FILL
+                                    }
+                                    VideoResizeMode.FILL -> {
+                                        aspectToastText = "Aspect: Zoom"
+                                        VideoResizeMode.ZOOM
+                                    }
+                                    VideoResizeMode.ZOOM -> {
+                                        aspectToastText = "Aspect: Fit"
+                                        VideoResizeMode.FIT
+                                    }
+                                }
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = aspectIcon,
+                                contentDescription = "Aspect Ratio: $aspectLabel",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        if (isFullscreen) {
+                            IconButton(
+                                onClick = {
+                                    isScreenLocked = true
+                                    showLockOverlay = true
+                                    aspectToastText = "Screen Locked"
+                                },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Lock Screen",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
+
+                        IconButton(
+                            onClick = { onFullscreenToggle(!isFullscreen) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(
+                                    if (isFullscreen) androidx.media3.ui.R.drawable.exo_styled_controls_fullscreen_exit
+                                    else androidx.media3.ui.R.drawable.exo_styled_controls_fullscreen_enter
+                                ),
+                                contentDescription = "Fullscreen",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(4.dp))
+
+                        IconButton(
+                            onClick = { onEnterPipClick() },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.PictureInPictureAlt, contentDescription = "PiP", tint = Color.White)
+                        }
+                    }
+                }
+
+                // Lock Screen UI Overlay (when screen is locked in landscape mode)
+                AnimatedVisibility(
+                    visible = isScreenLocked && showLockOverlay,
+                    enter = fadeIn() + scaleIn(),
+                    exit = fadeOut() + scaleOut(),
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .background(Color.Black.copy(alpha = 0.5f))
+                            .background(Color.Black.copy(alpha = 0.4f))
                             .clickable(
                                 interactionSource = remember { MutableInteractionSource() },
                                 indication = null
                             ) {
-                                showIframeControls = false
+                                showLockOverlay = false
                             }
+                            .padding(16.dp)
                     ) {
-                        IconButton(
-                            onClick = {
-                                try {
-                                    val intent = Intent(context, activity?.javaClass ?: context.javaClass).apply {
-                                        flags = Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK
-                                    }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
-                                }
-                                onMiniPlayerToggle(false)
-                                onFullscreenToggle(true)
-                            },
+                        Surface(
+                            color = Color(0xFF131B2E).copy(alpha = 0.92f),
+                            shape = RoundedCornerShape(24.dp),
+                            border = BorderStroke(1.5.dp, Color(0xFF00E5FF)),
+                            shadowElevation = 8.dp,
                             modifier = Modifier
-                                .align(Alignment.Center)
-                                .size(48.dp)
-                                .background(Color(0xFF2B62F6), CircleShape)
+                                .align(Alignment.CenterStart)
+                                .padding(start = 8.dp)
+                                .clickable {
+                                    isScreenLocked = false
+                                    showLockOverlay = false
+                                    aspectToastText = "Screen Unlocked"
+                                }
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Fullscreen,
-                                contentDescription = "Expand Full Screen",
-                                tint = Color.White,
-                                modifier = Modifier.size(30.dp)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LockOpen,
+                                    contentDescription = "Unlock Screen",
+                                    tint = Color(0xFF00E5FF),
+                                    modifier = Modifier.size(24.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Text(
+                                    text = "Tap to Unlock",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp
+                                )
+                            }
                         }
 
-                        IconButton(
-                            onClick = { onCloseClick() },
+                        Surface(
+                            color = Color.Black.copy(alpha = 0.8f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, Color(0xFFFF9800).copy(alpha = 0.6f)),
                             modifier = Modifier
-                                .align(Alignment.TopEnd)
-                                .padding(6.dp)
-                                .size(32.dp)
-                                .background(Color.Black.copy(alpha = 0.65f), CircleShape)
+                                .align(Alignment.TopCenter)
+                                .padding(top = 8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = "Close Video",
-                                tint = Color.White,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = null,
+                                    tint = Color(0xFFFF9800),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Screen Locked — Accidental touches blocked",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Medium,
+                                    fontSize = 12.sp
+                                )
+                            }
                         }
                     }
                 }
-            } else {
-                // Overlay Header for Back & Fullscreen Buttons
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .align(Alignment.TopCenter)
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(Color.Black.copy(alpha = 0.8f), Color.Transparent)
-                            )
-                        )
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onBackClick,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color.White.copy(alpha = 0.2f), CircleShape)
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
-                    }
 
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = title.ifEmpty { "Iframe Stream" },
-                            style = MaterialTheme.typography.titleMedium,
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                        if (subtitle.isNotEmpty()) {
-                            Text(
-                                text = subtitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = Color.LightGray,
-                                maxLines = 1
-                            )
-                        }
-                    }
-
-                    IconButton(
-                        onClick = { onFullscreenToggle(!isFullscreen) },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isFullscreen) Icons.Default.FullscreenExit else Icons.Default.Fullscreen,
-                            contentDescription = "Fullscreen",
-                            tint = Color.White
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(4.dp))
-
-                    IconButton(
-                        onClick = { onMiniPlayerToggle(true) },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(Icons.Default.PictureInPictureAlt, contentDescription = "PiP", tint = Color.White)
-                    }
+                if (showSpeedDialog) {
+                    val speedOptions = listOf(0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 1.75f, 2.0f)
+                    AlertDialog(
+                        onDismissRequest = { showSpeedDialog = false },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    imageVector = Icons.Default.Speed,
+                                    contentDescription = null,
+                                    tint = Color(0xFF00E5FF),
+                                    modifier = Modifier.size(22.dp)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Playback Speed",
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
+                                )
+                            }
+                        },
+                        text = {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                speedOptions.forEach { speed ->
+                                    val isSelected = playbackSpeed == speed
+                                    val label = if (speed == 1.0f) "1.0x (Normal)" else "${speed}x"
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable {
+                                                playbackSpeed = speed
+                                                webViewRef?.evaluateJavascript(
+                                                    "document.querySelectorAll('video').forEach(function(v){v.playbackRate = $speed;});",
+                                                    null
+                                                )
+                                                aspectToastText = "Speed: ${speed}x"
+                                                showSpeedDialog = false
+                                            }
+                                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            color = if (isSelected) Color(0xFF00E5FF) else Color.White,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 14.sp
+                                        )
+                                        if (isSelected) {
+                                            Icon(
+                                                imageVector = Icons.Default.Check,
+                                                contentDescription = "Selected",
+                                                tint = Color(0xFF00E5FF),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f))
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showSpeedDialog = false }) {
+                                Text("Close", color = Color(0xFF2B62F6))
+                            }
+                        },
+                        containerColor = Color(0xFF131B2E),
+                        titleContentColor = Color.White,
+                        textContentColor = Color.White
+                    )
                 }
             }
         }
@@ -1852,5 +2865,61 @@ fun ThinVideoSeekbar(
                 .size(10.dp)
                 .background(Color(0xFF2B62F6), CircleShape)
         )
+    }
+}
+
+@Composable
+fun GestureLevelIndicator(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    level: Float,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = Color(0xFF0F172A).copy(alpha = 0.88f),
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, Color(0xFF00E5FF).copy(alpha = 0.7f)),
+        shadowElevation = 10.dp,
+        modifier = modifier
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                tint = Color(0xFF00E5FF),
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .width(8.dp)
+                    .height(72.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.White.copy(alpha = 0.2f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(level.coerceIn(0f, 1f))
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color(0xFF00E5FF), Color(0xFF2B62F6))
+                            )
+                        )
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "${(level * 100).toInt()}%",
+                color = Color.White,
+                fontWeight = FontWeight.Bold,
+                fontSize = 12.sp
+            )
+        }
     }
 }

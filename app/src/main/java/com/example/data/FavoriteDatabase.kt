@@ -42,10 +42,54 @@ interface FavoriteDao {
     suspend fun deleteFavoriteById(id: String)
 }
 
-@Database(entities = [FavoriteEntity::class, UserProfileEntity::class, ChatMessageEntity::class], version = 3, exportSchema = false)
+@Entity(tableName = "continue_watching")
+data class ContinueWatchingEntity(
+    @PrimaryKey val id: String,
+    val title: String,
+    val subtitle: String = "",
+    val category: String = "",
+    val poster: String = "",
+    val background: String = "",
+    val streamType: String = "hls",
+    val streamUrl: String = "",
+    val positionMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val lastWatchedTimestamp: Long = System.currentTimeMillis(),
+    val rawJson: String = ""
+)
+
+@Dao
+interface ContinueWatchingDao {
+    @Query("SELECT * FROM continue_watching ORDER BY lastWatchedTimestamp DESC")
+    fun getAllContinueWatching(): Flow<List<ContinueWatchingEntity>>
+
+    @Query("SELECT * FROM continue_watching WHERE id = :id LIMIT 1")
+    suspend fun getContinueWatchingById(id: String): ContinueWatchingEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun saveProgress(item: ContinueWatchingEntity)
+
+    @Query("DELETE FROM continue_watching WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM continue_watching")
+    suspend fun clearAll()
+}
+
+@Database(
+    entities = [
+        FavoriteEntity::class,
+        UserProfileEntity::class,
+        ChatMessageEntity::class,
+        ContinueWatchingEntity::class
+    ],
+    version = 4,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun favoriteDao(): FavoriteDao
     abstract fun chatDao(): ChatDao
+    abstract fun continueWatchingDao(): ContinueWatchingDao
 
     companion object {
         @Volatile

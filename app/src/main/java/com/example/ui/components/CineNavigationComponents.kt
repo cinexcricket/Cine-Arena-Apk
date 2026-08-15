@@ -13,7 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,7 +124,9 @@ enum class CineTab(val label: String, val icon: @Composable () -> Unit) {
     HOME("Home", { Icon(Icons.Default.Home, contentDescription = "Home") }),
     SPORTS("Sports", { Icon(Icons.Default.EmojiEvents, contentDescription = "Sports") }),
     TV("TV", { Icon(Icons.Default.Tv, contentDescription = "TV") }),
-    FAVORITES("Favorites", { Icon(Icons.Default.Favorite, contentDescription = "Favorites") })
+    HISTORY("History", { Icon(Icons.Default.History, contentDescription = "History") }),
+    FAVORITES("Favorites", { Icon(Icons.Default.Favorite, contentDescription = "Favorites") }),
+    MOVIES("Movies", { Icon(Icons.Default.Movie, contentDescription = "Movies") })
 }
 
 @Composable
@@ -133,12 +135,16 @@ fun CineBottomNavBar(
     onTabSelected: (CineTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val bottomTabs = remember {
+        listOf(CineTab.HOME, CineTab.SPORTS, CineTab.TV, CineTab.HISTORY)
+    }
+
     NavigationBar(
         containerColor = CineSurfaceVariant,
         tonalElevation = 3.dp,
         modifier = modifier
     ) {
-        CineTab.entries.forEach { tab ->
+        bottomTabs.forEach { tab ->
             val isSelected = (selectedTab == tab)
             NavigationBarItem(
                 selected = isSelected,
@@ -166,6 +172,8 @@ fun CineBottomNavBar(
 @Composable
 fun CineDrawerContent(
     onOpenNetworkStream: () -> Unit,
+    onOpenMovies: () -> Unit = {},
+    onOpenFavorites: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
     val context = LocalContext.current
@@ -223,6 +231,25 @@ fun CineDrawerContent(
             onClick = {
                 onCloseDrawer()
                 onOpenNetworkStream()
+            }
+        )
+
+        DrawerMenuItem(
+            icon = Icons.Default.Movie,
+            title = "Movies (Requested)",
+            onClick = {
+                onCloseDrawer()
+                onOpenMovies()
+            }
+        )
+
+        DrawerMenuItem(
+            icon = Icons.Default.Favorite,
+            title = "Favorites",
+            tint = CineTextPrimary,
+            onClick = {
+                onCloseDrawer()
+                onOpenFavorites()
             }
         )
 

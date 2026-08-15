@@ -2,11 +2,14 @@ package com.example.network
 
 import com.example.data.ChatDao
 import com.example.data.ChatMessageEntity
+import com.example.data.ContinueWatchingDao
+import com.example.data.ContinueWatchingEntity
 import com.example.data.FavoriteDao
 import com.example.data.FavoriteEntity
 import com.example.data.UserProfileEntity
 import com.example.model.ChannelsData
 import com.example.model.MatchData
+import com.example.model.MovieResponse
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.Flow
@@ -27,6 +30,9 @@ interface CineApiService {
 
     @GET("api/tv/data.json")
     suspend fun getTvChannels(): ChannelsData
+
+    @GET("api/movies/data.json")
+    suspend fun getMovies(): MovieResponse
 }
 
 object RetrofitClient {
@@ -65,7 +71,8 @@ object RetrofitClient {
 class CineRepository(
     private val apiService: CineApiService = RetrofitClient.apiService,
     private val favoriteDao: FavoriteDao,
-    private val chatDao: ChatDao? = null
+    private val chatDao: ChatDao? = null,
+    private val continueWatchingDao: ContinueWatchingDao? = null
 ) {
     suspend fun fetchHomeMatches(): Result<MatchData> {
         return runCatching { apiService.getHomeMatches() }
@@ -79,6 +86,10 @@ class CineRepository(
         return runCatching { apiService.getTvChannels() }
     }
 
+    suspend fun fetchMovies(): Result<MovieResponse> {
+        return runCatching { apiService.getMovies() }
+    }
+
     fun getAllFavorites(): Flow<List<FavoriteEntity>> = favoriteDao.getAllFavorites()
 
     fun isFavorite(id: String): Flow<Boolean> = favoriteDao.isFavorite(id)
@@ -89,6 +100,20 @@ class CineRepository(
         } else {
             favoriteDao.insertFavorite(favorite)
         }
+    }
+
+    fun getContinueWatching(): Flow<List<ContinueWatchingEntity>>? = continueWatchingDao?.getAllContinueWatching()
+
+    suspend fun saveContinueWatching(item: ContinueWatchingEntity) {
+        continueWatchingDao?.saveProgress(item)
+    }
+
+    suspend fun deleteContinueWatching(id: String) {
+        continueWatchingDao?.deleteById(id)
+    }
+
+    suspend fun clearContinueWatching() {
+        continueWatchingDao?.clearAll()
     }
 
     fun getUserProfile(): Flow<UserProfileEntity?>? = chatDao?.getUserProfile()
