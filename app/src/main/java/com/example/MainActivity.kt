@@ -4,11 +4,13 @@ package com.example
 
 import android.app.Activity
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.example.ads.StartAppHelper
 import com.example.player.CinePlayerView
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
@@ -56,6 +59,26 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
 
+        // Initialize Start.io SDK with App ID: 207109422
+        StartAppHelper.initialize(this)
+        StartAppHelper.preloadExitAd(this)
+
+        // Initialize Android notification channel for broadcast alerts from cinexcricket.com
+        com.example.notification.HostingerNotificationManager.createNotificationChannel(this)
+
+        // Handle runtime notification permission for Android 13+ (API 33+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 101)
+            }
+        }
+
+        // Initialize background notification receiver
+        com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+
+        // Check if opened via notification click with target stream url
+        handleNotificationIntent(intent)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
@@ -71,6 +94,55 @@ class MainActivity : ComponentActivity() {
                 CineArenaApp(viewModel = viewModel, isInPipMode = isInPipModeState.value)
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        com.example.notification.HostingerNotificationManager.setAppForegroundState(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        com.example.notification.HostingerNotificationManager.setAppForegroundState(false)
+        com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        viewModel.closePlayer()
+        com.example.notification.HostingerNotificationManager.setAppForegroundState(false)
+        com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleNotificationIntent(intent)
+    }
+
+    private fun handleNotificationIntent(intent: Intent?) {
+        val targetStreamUrl = intent?.getStringExtra("target_stream_url") ?: return
+        if (targetStreamUrl.isBlank()) return
+
+        val targetTitle = intent.getStringExtra("target_stream_title") ?: "Live Broadcast Stream"
+        val targetImage = intent.getStringExtra("target_stream_image") ?: "https://cinexcricket.com/favicon.ico"
+
+        val parsed = com.example.player.StreamUrlParser.parse(targetStreamUrl)
+        val notifChannel = com.example.model.ChannelItem(
+            id = "notif_stream_${System.currentTimeMillis()}",
+            name = targetTitle,
+            streamUrl = parsed.cleanUrl,
+            streamType = parsed.streamType,
+            cookie = parsed.cookie,
+            referer = parsed.referer,
+            origin = parsed.origin,
+            drm = parsed.drmConfig,
+            category = "Live Match",
+            quality = "HD",
+            logo = if (targetImage.isNotBlank()) targetImage else "https://cinexcricket.com/favicon.ico",
+            status = "LIVE"
+        )
+        viewModel.playChannel(notifChannel)
     }
 
     override fun onPictureInPictureModeChanged(
@@ -98,11 +170,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        viewModel.closePlayer()
-    }
-
     fun updatePipParams(hasActiveChannel: Boolean) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
@@ -116,6 +183,22 @@ class MainActivity : ComponentActivity() {
                 e.printStackTrace()
             }
         }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        when (keyCode) {
+            KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_PLAY,
+            KeyEvent.KEYCODE_MEDIA_PAUSE,
+            KeyEvent.KEYCODE_MEDIA_STOP,
+            KeyEvent.KEYCODE_MEDIA_NEXT,
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                // Return super so MediaSession receives and executes the playback action seamlessly
+                return super.onKeyDown(keyCode, event)
+            }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onUserLeaveHint() {
@@ -147,6 +230,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     var lastSourceTab by remember { mutableStateOf<CineTab?>(null) }
     var showNetworkStreamDialog by remember { mutableStateOf(false) }
     var showSplashScreen by remember { mutableStateOf(true) }
+    var showExitDialog by remember { mutableStateOf(false) }
 
     var isPlayerExpanded by remember { mutableStateOf(true) }
     var isPlayerFullscreen by remember { mutableStateOf(false) }
@@ -234,7 +318,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         }
     }
 
-    BackHandler(enabled = showSplashScreen || drawerState.isOpen || isPlayerFullscreen || activeChannel != null || selectedTab != CineTab.HOME) {
+    BackHandler(enabled = true) {
         when {
             showSplashScreen -> { /* Wait or let splash finish */ }
             drawerState.isOpen -> {
@@ -250,12 +334,20 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
             selectedTab != CineTab.HOME -> {
                 selectedTab = CineTab.HOME
             }
+            showExitDialog -> {
+                showExitDialog = false
+            }
+            else -> {
+                activity?.let { StartAppHelper.preloadExitAd(it) }
+                showExitDialog = true
+            }
         }
     }
 
     // Automatically expand player whenever a new channel/match starts playing and update PIP params
     LaunchedEffect(activeChannel) {
         if (activeChannel != null) {
+            showSplashScreen = false
             isPlayerExpanded = true
         }
         (activity as? MainActivity)?.updatePipParams(activeChannel != null)
@@ -757,6 +849,63 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                             viewModel.playCustomStream(url, cookie, referer, origin, drmLicense, drmType)
                                             isPlayerFullscreen = true
                                             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                        }
+                                    )
+                                }
+
+                                // Exit Confirmation Dialog with Start.io Exit Interstitial Ad
+                                if (showExitDialog) {
+                                    AlertDialog(
+                                        onDismissRequest = { showExitDialog = false },
+                                        shape = androidx.compose.foundation.shape.RoundedCornerShape(22.dp),
+                                        containerColor = if (isDarkMode) CineSurface else Color.White,
+                                        title = {
+                                            Text(
+                                                text = "Exit Cine Arena?",
+                                                style = MaterialTheme.typography.titleLarge,
+                                                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                                                color = if (isDarkMode) Color.White else Color(0xFF0F172A)
+                                            )
+                                        },
+                                        text = {
+                                            Text(
+                                                text = "Are you sure you want to exit? We hope to see you back for more live streams!",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = if (isDarkMode) Color(0xFF94A3B8) else Color(0xFF64748B)
+                                            )
+                                        },
+                                        confirmButton = {
+                                            Button(
+                                                onClick = {
+                                                    showExitDialog = false
+                                                    if (activity != null) {
+                                                        StartAppHelper.showExitInterstitial(activity) {
+                                                            activity.finish()
+                                                        }
+                                                    }
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = MaterialTheme.colorScheme.primary
+                                                ),
+                                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Exit",
+                                                    color = Color.White,
+                                                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
+                                                )
+                                            }
+                                        },
+                                        dismissButton = {
+                                            OutlinedButton(
+                                                onClick = { showExitDialog = false },
+                                                shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Cancel",
+                                                    color = if (isDarkMode) Color.White else Color(0xFF0F172A)
+                                                )
+                                            }
                                         }
                                     )
                                 }

@@ -143,7 +143,11 @@ fun FavoritesScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                items(filteredList, key = { it.id }) { item ->
+                items(
+                    items = filteredList,
+                    key = { it.id },
+                    contentType = { "favorite_card" }
+                ) { item ->
                     FavoriteCard(
                         item = item,
                         onPlay = { onPlayFavorite(item) },
@@ -244,8 +248,9 @@ fun FavoriteCard(
                     color = CineSurfaceVariant,
                     shape = RoundedCornerShape(6.dp)
                 ) {
+                    val firstCat = item.category.split(Regex("[,/|;]+")).firstOrNull()?.trim()
                     Text(
-                        text = item.category.ifEmpty { item.itemType.uppercase() },
+                        text = if (!firstCat.isNullOrBlank()) firstCat else item.itemType.uppercase(),
                         color = CineTextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

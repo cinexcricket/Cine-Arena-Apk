@@ -83,12 +83,16 @@ object ClearKeyUtil {
         mediaUrl: String? = null
     ): DataSource.Factory {
         val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+            .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(30000)
-            .setReadTimeoutMs(30000)
+            .setConnectTimeoutMs(25000)
+            .setReadTimeoutMs(25000)
+            .setKeepPostFor302Redirects(true)
 
         val headers = mutableMapOf<String, String>()
+        headers["Accept"] = "*/*"
+        headers["Accept-Language"] = "en-US,en;q=0.9"
+
         if (!cookie.isNullOrBlank()) headers["Cookie"] = cookie.trim()
 
         val effectiveReferer = if (!referer.isNullOrBlank()) referer.trim() else {

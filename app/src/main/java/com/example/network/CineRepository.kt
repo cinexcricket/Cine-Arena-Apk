@@ -163,13 +163,15 @@ class CineRepository(
             
             for (i in 0 until messagesArray.length()) {
                 val item = messagesArray.getJSONObject(i)
+                val rawTime = item.optString("timestamp", "")
+                val istTime = com.example.util.IstTimeHelper.formatToIst(rawTime)
                 resultList.add(
                     com.example.model.ChatMessage(
                         id = item.optString("id", System.currentTimeMillis().toString()),
                         senderName = item.optString("senderName", "User"),
                         senderPhone = item.optString("senderPhone", ""),
                         text = item.optString("text", ""),
-                        timestamp = item.optString("timestamp", "Just now"),
+                        timestamp = istTime,
                         isMe = false
                     )
                 )

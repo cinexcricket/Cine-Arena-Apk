@@ -268,7 +268,11 @@ fun HistoryScreen(
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                items(continueWatchingItems, key = { "cw_${it.id}" }) { item ->
+                                items(
+                                    items = continueWatchingItems,
+                                    key = { "cw_${it.id}" },
+                                    contentType = { "continue_watching_card" }
+                                ) { item ->
                                     HistoryContinueWatchingCard(
                                         item = item,
                                         onClick = { onPlayItem(item) },
@@ -305,7 +309,11 @@ fun HistoryScreen(
                 }
 
                 // Section 3: History List Items (Vertical List)
-                items(historyList, key = { "hist_${it.id}_${it.lastWatchedTimestamp}" }) { item ->
+                items(
+                    items = historyList,
+                    key = { "hist_${it.id}_${it.lastWatchedTimestamp}" },
+                    contentType = { "history_item" }
+                ) { item ->
                     HistoryListItem(
                         item = item,
                         onClick = { onPlayItem(item) },

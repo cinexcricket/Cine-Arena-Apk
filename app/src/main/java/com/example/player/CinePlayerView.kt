@@ -8,6 +8,7 @@ import android.content.pm.ActivityInfo
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -71,6 +72,7 @@ import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
+import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 import com.example.model.DrmConfig
@@ -317,6 +319,7 @@ fun ExoStreamPlayer(
     var showControls by remember { mutableStateOf(true) }
     var isBuffering by remember { mutableStateOf(true) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var retryCount by remember { mutableIntStateOf(0) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
 
@@ -420,7 +423,7 @@ fun ExoStreamPlayer(
         streamUrl.contains(".m3u8", ignoreCase = true)
     }
 
-    val exoPlayer = remember(streamUrl, streamType, drmConfig, cookie, referer, origin) {
+    val exoPlayer = remember(streamUrl, streamType, drmConfig, cookie, referer, origin, retryCount) {
         try {
             val parsed = StreamUrlParser.parse(
                 rawUrl = streamUrl,
@@ -577,6 +580,7 @@ fun ExoStreamPlayer(
                 .setRenderersFactory(renderersFactory)
                 .setLoadControl(loadControl)
                 .setAudioAttributes(audioAttrs, true)
+                .setHandleAudioBecomingNoisy(true)
                 .build().apply {
                     setMediaSource(mediaSource)
                     if (initialPositionMs > 0L) {
@@ -591,13 +595,26 @@ fun ExoStreamPlayer(
         }
     }
 
+    // MediaSession enables OS-level Media Button handling (Bluetooth earbuds tap to play/pause, headset controls)
+    val mediaSession = remember(exoPlayer) {
+        val player = exoPlayer ?: return@remember null
+        try {
+            MediaSession.Builder(context, player)
+                .setId("CinePlayerSession_${player.hashCode()}")
+                .build()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+
     LaunchedEffect(resizeMode, currentVideoSize, isFullscreen, exoPlayer) {
         playerViewRef?.let { pv ->
             applyExoPlayerAspectRatio(pv, exoPlayer, resizeMode, currentVideoSize)
         }
     }
 
-    DisposableEffect(exoPlayer) {
+    DisposableEffect(exoPlayer, mediaSession) {
         val player = exoPlayer ?: return@DisposableEffect onDispose {}
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
@@ -615,7 +632,16 @@ fun ExoStreamPlayer(
 
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 isBuffering = false
-                errorMessage = "Playback Error: ${error.localizedMessage ?: "Stream unavailable or network issue"}"
+                val cause = error.cause
+                val msg = when {
+                    cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException && cause.responseCode == 403 ->
+                        "Stream server returned 403 (Forbidden). The stream link may require auth tokens or has expired."
+                    cause is androidx.media3.datasource.HttpDataSource.HttpDataSourceException ->
+                        "Network connection error while fetching stream."
+                    else ->
+                        error.localizedMessage ?: "Stream unavailable or temporarily offline"
+                }
+                errorMessage = msg
             }
 
             override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
@@ -698,6 +724,11 @@ fun ExoStreamPlayer(
                 onPlaybackProgress(currentPosition, duration)
             }
             player.removeListener(listener)
+            try {
+                mediaSession?.release()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             player.release()
         }
     }
@@ -1636,6 +1667,75 @@ fun ExoStreamPlayer(
                     }
                 }
             }
+
+            // In-Player Error State Overlay with Retry Button
+            if (errorMessage != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.88f))
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = Color(0xFFFF5252),
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = "Playback Issue",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = Color.White
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = errorMessage ?: "Stream is currently unavailable",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.75f),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.widthIn(max = 380.dp)
+                        )
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Button(
+                                onClick = {
+                                    errorMessage = null
+                                    isBuffering = true
+                                    retryCount++
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF2B62F6)
+                                ),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = Color.White
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Retry Stream",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2129,7 +2229,19 @@ fun IframeStreamPlayer(
                             settings.javaScriptEnabled = true
                             settings.domStorageEnabled = true
                             settings.mediaPlaybackRequiresUserGesture = false
-                            webViewClient = WebViewClient()
+                            settings.databaseEnabled = true
+                            webViewClient = object : WebViewClient() {
+                                override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                                    try {
+                                        view?.stopLoading()
+                                        view?.loadUrl("about:blank")
+                                        view?.destroy()
+                                    } catch (e: Exception) {
+                                        e.printStackTrace()
+                                    }
+                                    return true
+                                }
+                            }
                             webChromeClient = object : WebChromeClient() {
                                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                     customView = view
@@ -2340,8 +2452,20 @@ fun IframeStreamPlayer(
                         settings.javaScriptEnabled = true
                         settings.domStorageEnabled = true
                         settings.mediaPlaybackRequiresUserGesture = false
+                        settings.databaseEnabled = true
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"
-                        webViewClient = WebViewClient()
+                        webViewClient = object : WebViewClient() {
+                            override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                                try {
+                                    view?.stopLoading()
+                                    view?.loadUrl("about:blank")
+                                    view?.destroy()
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                return true
+                            }
+                        }
                         webChromeClient = object : WebChromeClient() {
                             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                 customView = view

@@ -29,6 +29,34 @@ data class MatchItem(
             ?: category?.takeIf { it.isNotBlank() }
             ?: sport.takeIf { it.isNotBlank() }
             ?: "Webseries"
+
+    val parsedCategories: List<String>
+        get() {
+            val list = mutableListOf<String>()
+            if (!categories.isNullOrBlank()) {
+                list.addAll(splitCategoryString(categories))
+            }
+            if (!category.isNullOrBlank()) {
+                list.addAll(splitCategoryString(category))
+            }
+            if (sport.isNotBlank() && !sport.equals("Sports", ignoreCase = true)) {
+                list.addAll(splitCategoryString(sport))
+            }
+            if (list.isEmpty() && sport.isNotBlank()) {
+                list.addAll(splitCategoryString(sport))
+            }
+            return list.distinct()
+        }
+
+    val firstCategory: String
+        get() = parsedCategories.firstOrNull() ?: displayCategory.split(Regex("[,/|;]+")).firstOrNull()?.trim() ?: "Sports"
+}
+
+fun splitCategoryString(raw: String?): List<String> {
+    if (raw.isNullOrBlank()) return emptyList()
+    return raw.split(Regex("[,/|;]+"))
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
 }
 
 @JsonClass(generateAdapter = true)
@@ -65,7 +93,13 @@ data class ChannelItem(
     @Json(name = "cookie") val cookie: String? = null,
     @Json(name = "referer") val referer: String? = null,
     @Json(name = "origin") val origin: String? = null
-)
+) {
+    val parsedCategories: List<String>
+        get() = splitCategoryString(category).ifEmpty { listOf("General") }
+
+    val firstCategory: String
+        get() = parsedCategories.firstOrNull() ?: category.split(Regex("[,/|;]+")).firstOrNull()?.trim() ?: "General"
+}
 
 @JsonClass(generateAdapter = true)
 data class DrmConfig(

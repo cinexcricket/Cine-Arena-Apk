@@ -41,6 +41,8 @@ import kotlin.random.Random
 import com.example.model.ChannelItem
 import com.example.model.ChatMessage
 import com.example.model.MatchItem
+import com.example.util.IstTimeHelper
+import com.example.ads.StartAppHorizontalBannerAd
 import com.example.ui.theme.*
 
 @Composable
@@ -159,7 +161,11 @@ fun PlayerDetailOverlay(
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            items(qualityList, key = { it.first + it.second.id }) { (qualityLabel, targetChannel) ->
+                            items(
+                                items = qualityList,
+                                key = { it.first + it.second.id },
+                                contentType = { "quality_chip" }
+                            ) { (qualityLabel, targetChannel) ->
                                 val isSelected = (activeChannel?.id == targetChannel.id) || (activeChannel == null && targetChannel == channelsList.first())
                                 Surface(
                                     onClick = { onChannelSelect(targetChannel) },
@@ -196,6 +202,11 @@ fun PlayerDetailOverlay(
                     }
                 }
             }
+
+            // Horizontal Banner Ad below Channel Switching
+            StartAppHorizontalBannerAd(
+                modifier = Modifier.fillMaxWidth()
+            )
 
             // Section 2: Live Match Chat Card (Full width, fills remaining height)
             Card(
@@ -325,18 +336,11 @@ fun PlayerDetailOverlay(
                                                     fontSize = 11.sp,
                                                     color = if (msg.isMe) CinePrimary else CineTextPrimary
                                                 )
-                                                if (!msg.senderPhone.isNullOrBlank()) {
-                                                    Spacer(modifier = Modifier.width(4.dp))
-                                                    Text(
-                                                        text = "(${msg.senderPhone})",
-                                                        fontSize = 9.sp,
-                                                        color = CineTextSecondary
-                                                    )
-                                                }
                                                 Spacer(modifier = Modifier.width(6.dp))
                                                 Text(
-                                                    text = msg.timestamp,
+                                                    text = IstTimeHelper.formatToIst(msg.timestamp),
                                                     fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Medium,
                                                     color = CineTextSecondary
                                                 )
                                             }

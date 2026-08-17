@@ -58,7 +58,7 @@ fun TvScreen(
     val categories = remember(tvChannelsState) {
         if (tvChannelsState is UiState.Success) {
             val fetchedCategories = tvChannelsState.data
-                .map { it.category.trim() }
+                .flatMap { it.parsedCategories }
                 .filter { it.isNotBlank() }
                 .distinct()
             listOf("All Channels") + fetchedCategories
@@ -207,7 +207,11 @@ fun TvScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
-                items(categories) { cat ->
+                items(
+                    items = categories,
+                    key = { it },
+                    contentType = { "category_pill" }
+                ) { cat ->
                     val isSelected = (cat == selectedCategory)
                     Surface(
                         onClick = { onCategorySelected(cat) },
@@ -253,10 +257,10 @@ fun TvScreen(
             is UiState.Success -> {
                 val filteredChannels = tvChannelsState.data.filter { channel ->
                     val matchesCategory = if (selectedCategory == "All Channels" || selectedCategory == "All") true
-                    else channel.category.equals(selectedCategory, ignoreCase = true)
+                    else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
 
                     val matchesSearch = if (searchQuery.isBlank()) true
-                    else channel.name.contains(searchQuery, ignoreCase = true) || channel.category.contains(searchQuery, ignoreCase = true)
+                    else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
 
                     matchesCategory && matchesSearch
                 }
@@ -276,7 +280,11 @@ fun TvScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(filteredChannels, key = { it.id }) { channel ->
+                        items(
+                            items = filteredChannels,
+                            key = { it.id },
+                            contentType = { "tv_channel" }
+                        ) { channel ->
                             val isFavorite = favorites.any { it.id == channel.id }
                             TvChannelCard(
                                 channel = channel,
@@ -390,7 +398,7 @@ fun TvChannelCard(
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = channel.category,
+                        text = channel.firstCategory,
                         color = CineTextSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,

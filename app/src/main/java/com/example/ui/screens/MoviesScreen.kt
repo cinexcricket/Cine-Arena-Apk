@@ -67,7 +67,7 @@ fun MoviesScreen(
     val categories = remember(moviesState) {
         if (moviesState is UiState.Success) {
             val fetchedCategories = moviesState.data
-                .map { it.displayCategory.trim() }
+                .flatMap { it.parsedCategories }
                 .filter { it.isNotBlank() }
                 .distinct()
             listOf("All Movies") + fetchedCategories
@@ -228,18 +228,17 @@ fun MoviesScreen(
             }
             is UiState.Success -> {
                 val filteredMovies = moviesState.data.filter { movie ->
-                    val cat = movie.displayCategory
                     val matchesCategory = if (selectedCategory == "All Movies" || selectedCategory == "All") {
                         true
                     } else {
-                        cat.equals(selectedCategory, ignoreCase = true)
+                        movie.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
                     }
 
                     val matchesSearch = if (searchQuery.isBlank()) {
                         true
                     } else {
                         movie.title.contains(searchQuery, ignoreCase = true) ||
-                                cat.contains(searchQuery, ignoreCase = true)
+                                movie.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
                     }
 
                     matchesCategory && matchesSearch
@@ -259,7 +258,11 @@ fun MoviesScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            items(categories) { cat ->
+                            items(
+                                items = categories,
+                                key = { it },
+                                contentType = { "category_pill" }
+                            ) { cat ->
                                 val isSelected = (cat == selectedCategory)
                                 Surface(
                                     onClick = { onCategorySelected(cat) },
@@ -296,7 +299,11 @@ fun MoviesScreen(
                             }
                         }
                     } else {
-                        items(filteredMovies, key = { it.id }) { movie ->
+                        items(
+                            items = filteredMovies,
+                            key = { it.id },
+                            contentType = { "movie_card" }
+                        ) { movie ->
                             val isFavorite = favorites.any { it.id == movie.id }
                             val isCurrentPlaying = activeMatchId == movie.id
 
@@ -388,7 +395,7 @@ fun MovieCard(
                         .align(Alignment.TopStart)
                 ) {
                     Text(
-                        text = movie.displayCategory.uppercase(),
+                        text = movie.firstCategory.uppercase(),
                         color = Color.White,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,

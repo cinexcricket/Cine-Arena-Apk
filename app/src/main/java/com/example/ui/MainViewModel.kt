@@ -101,9 +101,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     // Chat messages
     private val defaultInitialChats = listOf(
-        ChatMessage("1", "CricketFan99", "Who is winning today?", "10:12 AM"),
-        ChatMessage("2", "SportsLover", "IND batting looks solid!", "10:14 AM"),
-        ChatMessage("3", "Admin", "Welcome to Cine Arena live stream!", "10:15 AM")
+        ChatMessage("1", "CricketFan99", "Who is winning today?", "10:12 AM IST"),
+        ChatMessage("2", "SportsLover", "IND batting looks solid!", "10:14 AM IST"),
+        ChatMessage("3", "Admin", "Welcome to Cine Arena live stream!", "10:15 AM IST")
     )
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(defaultInitialChats)
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
@@ -118,8 +118,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.getChatMessages("global_live")?.collect { entities ->
                 val dbMsgs = entities.map { entity ->
-                    val date = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault())
-                        .format(java.util.Date(entity.timestamp))
+                    val date = com.example.util.IstTimeHelper.formatToIst(entity.timestamp)
                     ChatMessage(
                         id = entity.id,
                         senderName = entity.senderName,
@@ -622,7 +621,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     text = text
                 )
             }
-            val currentTime = java.text.SimpleDateFormat("hh:mm a", java.util.Locale.getDefault()).format(java.util.Date())
+            val currentTime = com.example.util.IstTimeHelper.currentIstFormatted()
             val msg = ChatMessage(
                 id = System.currentTimeMillis().toString(),
                 senderName = profile.name,

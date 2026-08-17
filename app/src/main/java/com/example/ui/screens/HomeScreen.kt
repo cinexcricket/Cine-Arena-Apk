@@ -109,7 +109,7 @@ fun HomeScreen(
     val categories = remember(homeMatchesState) {
         if (homeMatchesState is UiState.Success) {
             val fetchedCategories = homeMatchesState.data
-                .map { it.sport.trim() }
+                .flatMap { it.parsedCategories }
                 .filter { it.isNotBlank() }
                 .distinct()
             listOf("All Sports") + fetchedCategories
@@ -161,7 +161,7 @@ fun HomeScreen(
                     val matches = remember(homeMatchesState.data, selectedCategory) {
                         homeMatchesState.data.filter { match ->
                             if (selectedCategory == "All Sports" || selectedCategory == "All") true
-                            else match.sport.equals(selectedCategory, ignoreCase = true)
+                            else match.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
                         }
                     }
 
@@ -230,7 +230,11 @@ fun HomeScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 modifier = Modifier.padding(bottom = 4.dp)
                             ) {
-                                items(categories) { cat ->
+                                items(
+                                    items = categories,
+                                    key = { it },
+                                    contentType = { "category_pill" }
+                                ) { cat ->
                                     val isSelected = (cat == selectedCategory)
                                     Surface(
                                         onClick = { onCategorySelected(cat) },
@@ -267,7 +271,11 @@ fun HomeScreen(
                                 }
                             }
                         } else {
-                            items(matchRows, key = { row -> row.firstOrNull()?.id ?: "" }) { matchRow ->
+                            items(
+                                items = matchRows,
+                                key = { row -> row.joinToString(separator = "_") { it.id } },
+                                contentType = { "match_row" }
+                            ) { matchRow ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -381,7 +389,7 @@ fun MatchCard(
                         .align(Alignment.TopStart)
                 ) {
                     Text(
-                        text = match.sport.uppercase(),
+                        text = match.firstCategory.uppercase(),
                         color = Color.White,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,

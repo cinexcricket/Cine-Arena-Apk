@@ -57,7 +57,7 @@ fun SportsScreen(
     val categories = remember(sportsChannelsState) {
         if (sportsChannelsState is UiState.Success) {
             val fetchedCategories = sportsChannelsState.data
-                .map { it.category.trim() }
+                .flatMap { it.parsedCategories }
                 .filter { it.isNotBlank() }
                 .distinct()
             listOf("All Sports") + fetchedCategories
@@ -206,7 +206,11 @@ fun SportsScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.padding(bottom = 8.dp)
             ) {
-                items(categories) { cat ->
+                items(
+                    items = categories,
+                    key = { it },
+                    contentType = { "category_pill" }
+                ) { cat ->
                     val isSelected = (cat == selectedCategory)
                     Surface(
                         onClick = { onCategorySelected(cat) },
@@ -252,10 +256,10 @@ fun SportsScreen(
             is UiState.Success -> {
                 val filteredSports = sportsChannelsState.data.filter { channel ->
                     val matchesCategory = if (selectedCategory == "All Sports" || selectedCategory == "All") true
-                    else channel.category.equals(selectedCategory, ignoreCase = true)
+                    else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
 
                     val matchesSearch = if (searchQuery.isBlank()) true
-                    else channel.name.contains(searchQuery, ignoreCase = true) || channel.category.contains(searchQuery, ignoreCase = true)
+                    else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
 
                     matchesCategory && matchesSearch
                 }
@@ -275,7 +279,11 @@ fun SportsScreen(
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(filteredSports, key = { it.id }) { channel ->
+                        items(
+                            items = filteredSports,
+                            key = { it.id },
+                            contentType = { "sports_channel" }
+                        ) { channel ->
                             val isFavorite = favorites.any { it.id == channel.id }
                             SportsCard(
                                 channel = channel,
@@ -390,7 +398,7 @@ fun SportsCard(
                     shape = RoundedCornerShape(6.dp)
                 ) {
                     Text(
-                        text = channel.category,
+                        text = channel.firstCategory,
                         color = CineTextSecondary,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
