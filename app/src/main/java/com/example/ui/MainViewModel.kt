@@ -99,13 +99,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // Reaction Likes Counter
     val liveMatchLikes = MutableStateFlow(1240)
 
-    // Chat messages
-    private val defaultInitialChats = listOf(
-        ChatMessage("1", "CricketFan99", "Who is winning today?", "10:12 AM IST"),
-        ChatMessage("2", "SportsLover", "IND batting looks solid!", "10:14 AM IST"),
-        ChatMessage("3", "Admin", "Welcome to Cine Arena live stream!", "10:15 AM IST")
-    )
-    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(defaultInitialChats)
+    // Chat messages (Pure database chat loaded from local Room DB)
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
     init {
@@ -118,36 +113,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.getChatMessages("global_live")?.collect { entities ->
                 val dbMsgs = entities.map { entity ->
-                    val date = com.example.util.IstTimeHelper.formatToIst(entity.timestamp)
+                    val istTime = if (entity.formattedTime.isNotBlank()) {
+                        entity.formattedTime
+                    } else {
+                        com.example.util.IstTimeHelper.formatToIst(entity.timestamp)
+                    }
                     ChatMessage(
                         id = entity.id,
                         senderName = entity.senderName,
                         text = entity.text,
-                        timestamp = date,
+                        timestamp = istTime,
                         senderPhone = entity.senderPhone,
-                        isMe = true
+                        isMe = entity.isMe
                     )
                 }
-                _chatMessages.value = defaultInitialChats + dbMsgs
+                _chatMessages.value = dbMsgs
             }
         }
     }
 
     private fun startHostingerChatSync() {
         viewModelScope.launch {
-            while (true) {
-                val apiUrl = userProfile.value?.hostingerApiUrl?.ifBlank { "https://cinexcricket.com/api/chat.php" } ?: "https://cinexcricket.com/api/chat.php"
-                if (apiUrl.isNotBlank() && apiUrl.startsWith("http")) {
-                    val remoteMsgs = repository.fetchHostingerChats(apiUrl, "global_live")
-                    if (remoteMsgs.isNotEmpty()) {
-                        val currentMsgs = _chatMessages.value
-                        val newMsgs = remoteMsgs.filter { remote -> currentMsgs.none { it.id == remote.id } }
-                        if (newMsgs.isNotEmpty()) {
-                            _chatMessages.value = currentMsgs + newMsgs
+            while (isActive) {
+                try {
+                    val apiUrl = userProfile.value?.hostingerApiUrl?.ifBlank { "https://cinexcricket.com/api/chat.php" } ?: "https://cinexcricket.com/api/chat.php"
+                    if (apiUrl.isNotBlank() && apiUrl.startsWith("http")) {
+                        val remoteMsgs = repository.fetchHostingerChats(apiUrl, "global_live")
+                        if (remoteMsgs.isNotEmpty()) {
+                            val currentIds = _chatMessages.value.map { it.id }.toSet()
+                            remoteMsgs.forEach { remote ->
+                                if (!currentIds.contains(remote.id)) {
+                                    repository.saveRemoteChatMessage(
+                                        id = remote.id,
+                                        matchId = "global_live",
+                                        senderName = remote.senderName,
+                                        senderPhone = remote.senderPhone ?: "",
+                                        text = remote.text,
+                                        timestamp = System.currentTimeMillis(),
+                                        formattedTime = remote.timestamp
+                                    )
+                                }
+                            }
                         }
                     }
-                }
-                kotlinx.coroutines.delay(5000)
+                } catch (_: Exception) {}
+                kotlinx.coroutines.delay(10000L)
             }
         }
     }
@@ -596,41 +606,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun sendChatMessage(text: String) {
-        if (text.isBlank()) return
+        val cleanText = text.trim()
+        if (cleanText.isBlank()) return
         val profile = userProfile.value
         if (profile == null || profile.name.isBlank()) {
-            pendingChatText.value = text
+            pendingChatText.value = cleanText
             showProfileDialog.value = true
             return
         }
 
         viewModelScope.launch {
+            val currentIstTime = com.example.util.IstTimeHelper.currentIstFormatted()
+            val timestamp = System.currentTimeMillis()
+            
+            // Save directly into local database with IST timestamp
             repository.saveChatMessage(
                 matchId = "global_live",
                 senderName = profile.name,
                 senderPhone = profile.phoneNumber,
-                text = text
-            )
-            val apiUrl = profile.hostingerApiUrl.ifBlank { "https://cinexcricket.com/api/chat.php" }
-            if (apiUrl.isNotBlank() && apiUrl.startsWith("http")) {
-                repository.postHostingerChat(
-                    apiUrl = apiUrl,
-                    matchId = "global_live",
-                    senderName = profile.name,
-                    senderPhone = profile.phoneNumber,
-                    text = text
-                )
-            }
-            val currentTime = com.example.util.IstTimeHelper.currentIstFormatted()
-            val msg = ChatMessage(
-                id = System.currentTimeMillis().toString(),
-                senderName = profile.name,
-                senderPhone = profile.phoneNumber,
-                text = text,
-                timestamp = currentTime,
+                text = cleanText,
+                timestamp = timestamp,
+                formattedTime = currentIstTime,
                 isMe = true
             )
-            _chatMessages.value = _chatMessages.value + msg
+
+            // Asynchronously sync with Hostinger chat server if configured
+            val apiUrl = profile.hostingerApiUrl.ifBlank { "https://cinexcricket.com/api/chat.php" }
+            if (apiUrl.isNotBlank() && apiUrl.startsWith("http")) {
+                try {
+                    repository.postHostingerChat(
+                        apiUrl = apiUrl,
+                        matchId = "global_live",
+                        senderName = profile.name,
+                        senderPhone = profile.phoneNumber,
+                        text = cleanText
+                    )
+                } catch (_: Exception) {}
+            }
         }
     }
 }

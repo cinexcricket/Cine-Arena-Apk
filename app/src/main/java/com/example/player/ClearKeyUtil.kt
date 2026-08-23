@@ -85,8 +85,8 @@ object ClearKeyUtil {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(25000)
-            .setReadTimeoutMs(25000)
+            .setConnectTimeoutMs(4000)
+            .setReadTimeoutMs(6000)
             .setKeepPostFor302Redirects(true)
 
         val headers = mutableMapOf<String, String>()

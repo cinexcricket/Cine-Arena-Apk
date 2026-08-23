@@ -39,6 +39,7 @@ import com.example.model.MatchItem
 import com.example.ui.UiState
 import com.example.ui.components.cineSharedBounds
 import com.example.ui.components.cineSharedElement
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -227,21 +228,23 @@ fun MoviesScreen(
                 }
             }
             is UiState.Success -> {
-                val filteredMovies = moviesState.data.filter { movie ->
-                    val matchesCategory = if (selectedCategory == "All Movies" || selectedCategory == "All") {
-                        true
-                    } else {
-                        movie.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
-                    }
+                val filteredMovies = remember(moviesState.data, selectedCategory, searchQuery) {
+                    moviesState.data.filter { movie ->
+                        val matchesCategory = if (selectedCategory == "All Movies" || selectedCategory == "All") {
+                            true
+                        } else {
+                            movie.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
+                        }
 
-                    val matchesSearch = if (searchQuery.isBlank()) {
-                        true
-                    } else {
-                        movie.title.contains(searchQuery, ignoreCase = true) ||
-                                movie.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
-                    }
+                        val matchesSearch = if (searchQuery.isBlank()) {
+                            true
+                        } else {
+                            movie.title.contains(searchQuery, ignoreCase = true) ||
+                                    movie.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
+                        }
 
-                    matchesCategory && matchesSearch
+                        matchesCategory && matchesSearch
+                    }
                 }
 
                 LazyVerticalGrid(
@@ -269,7 +272,13 @@ fun MoviesScreen(
                                     shape = RoundedCornerShape(20.dp),
                                     color = if (isSelected) CinePrimary else CineSurfaceVariant,
                                     border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
-                                    modifier = Modifier.height(36.dp)
+                                    modifier = Modifier
+                                        .height(36.dp)
+                                        .dpadFocusable(
+                                            shape = RoundedCornerShape(20.dp),
+                                            focusedBorderColor = Color.White,
+                                            scaleOnFocus = 1.06f
+                                        )
                                 ) {
                                     Box(
                                         contentAlignment = Alignment.Center,
@@ -323,6 +332,17 @@ fun MoviesScreen(
 }
 }
 
+private val MovieCardBackgroundGradient = Brush.verticalGradient(
+    colors = listOf(Color(0xFF1E1B4B), Color(0xFF0F172A))
+)
+private val MovieCardOverlayGradient = Brush.verticalGradient(
+    colors = listOf(
+        Color.Black.copy(alpha = 0.45f),
+        Color.Transparent,
+        Color.Black.copy(alpha = 0.7f)
+    )
+)
+
 @Composable
 fun MovieCard(
     movie: MatchItem,
@@ -331,6 +351,13 @@ fun MovieCard(
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
+    val imageUrl = remember(movie.poster, movie.teamA?.logo) {
+        movie.poster ?: movie.teamA?.logo
+    }
+    val categoryUpper = remember(movie.firstCategory) {
+        movie.firstCategory.uppercase()
+    }
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
@@ -344,6 +371,13 @@ fun MovieCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .dpadFocusable(
+                shape = RoundedCornerShape(16.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 3.dp,
+                scaleOnFocus = 1.05f,
+                elevationOnFocus = 8.dp
+            )
             .cineSharedBounds("card_${movie.id}")
             .clickable(onClick = onClick)
     ) {
@@ -354,13 +388,8 @@ fun MovieCard(
                     .fillMaxWidth()
                     .aspectRatio(0.72f) // Standard movie/series poster aspect ratio
                     .cineSharedElement("poster_${movie.id}")
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color(0xFF1E1B4B), Color(0xFF0F172A))
-                        )
-                    )
+                    .background(MovieCardBackgroundGradient)
             ) {
-                val imageUrl = movie.poster ?: movie.teamA?.logo
                 if (!imageUrl.isNullOrEmpty()) {
                     AsyncImage(
                         model = imageUrl,
@@ -374,15 +403,7 @@ fun MovieCard(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.45f),
-                                    Color.Transparent,
-                                    Color.Black.copy(alpha = 0.7f)
-                                )
-                            )
-                        )
+                        .background(MovieCardOverlayGradient)
                 )
 
                 // Category Badge on Top Left on Background Image
@@ -395,7 +416,7 @@ fun MovieCard(
                         .align(Alignment.TopStart)
                 ) {
                     Text(
-                        text = movie.firstCategory.uppercase(),
+                        text = categoryUpper,
                         color = Color.White,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
@@ -447,7 +468,7 @@ fun MovieCard(
                 }
             }
 
-            // Below Image: Movie Title Only
+            // Below Image: Movie Title (Full Title)
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -458,10 +479,7 @@ fun MovieCard(
                     fontWeight = FontWeight.Bold,
                     fontSize = 13.sp,
                     color = CineTextPrimary,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    lineHeight = 17.sp,
-                    modifier = Modifier.heightIn(min = 34.dp)
+                    lineHeight = 18.sp
                 )
             }
         }

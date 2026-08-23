@@ -42,7 +42,6 @@ import com.example.model.ChannelItem
 import com.example.model.ChatMessage
 import com.example.model.MatchItem
 import com.example.util.IstTimeHelper
-import com.example.ads.StartAppHorizontalBannerAd
 import com.example.ui.theme.*
 
 @Composable
@@ -80,6 +79,14 @@ fun PlayerDetailOverlay(
 
     // Floating heart balloons state (JioHotstar style)
     var floatingHearts by remember { mutableStateOf(listOf<FloatingHeart>()) }
+
+    var currentLiveIstTime by remember { mutableStateOf(IstTimeHelper.currentIstFormatted()) }
+    LaunchedEffect(Unit) {
+        while (true) {
+            currentLiveIstTime = IstTimeHelper.currentIstFormatted()
+            kotlinx.coroutines.delay(1000L)
+        }
+    }
 
     val chatScrollState = rememberScrollState()
 
@@ -203,11 +210,6 @@ fun PlayerDetailOverlay(
                 }
             }
 
-            // Horizontal Banner Ad below Channel Switching
-            StartAppHorizontalBannerAd(
-                modifier = Modifier.fillMaxWidth()
-            )
-
             // Section 2: Live Match Chat Card (Full width, fills remaining height)
             Card(
                 shape = RoundedCornerShape(8.dp),
@@ -229,15 +231,39 @@ fun PlayerDetailOverlay(
                                 Icons.Default.ChatBubble,
                                 contentDescription = "Chat",
                                 tint = CinePrimary,
-                                modifier = Modifier.size(16.dp)
+                                modifier = Modifier.size(15.dp)
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
                             Text(
-                                text = "Live Match Chat",
+                                text = "Live Chat",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
+                                fontSize = 13.sp,
                                 color = CineTextPrimary
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Surface(
+                                color = CinePrimary.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, CinePrimary.copy(alpha = 0.35f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .background(CineLiveRed, CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text(
+                                        text = currentLiveIstTime,
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = CinePrimary
+                                    )
+                                }
+                            }
                             Spacer(modifier = Modifier.width(2.dp))
                             IconButton(
                                 onClick = { showDatabaseGuideModal = true },
@@ -337,12 +363,19 @@ fun PlayerDetailOverlay(
                                                     color = if (msg.isMe) CinePrimary else CineTextPrimary
                                                 )
                                                 Spacer(modifier = Modifier.width(6.dp))
-                                                Text(
-                                                    text = IstTimeHelper.formatToIst(msg.timestamp),
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Medium,
-                                                    color = CineTextSecondary
-                                                )
+                                                Surface(
+                                                    color = CineSurface.copy(alpha = 0.7f),
+                                                    shape = RoundedCornerShape(3.dp),
+                                                    border = BorderStroke(0.5.dp, CineOutline.copy(alpha = 0.4f))
+                                                ) {
+                                                    Text(
+                                                        text = IstTimeHelper.formatToIst(msg.timestamp),
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        color = CineTextSecondary,
+                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                    )
+                                                }
                                             }
                                             Text(
                                                 text = msg.text,

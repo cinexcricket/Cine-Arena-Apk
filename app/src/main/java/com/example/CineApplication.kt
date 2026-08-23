@@ -14,9 +14,11 @@ class CineApplication : Application(), ImageLoaderFactory {
 
     override fun onCreate() {
         super.onCreate()
-        com.example.notification.HostingerNotificationManager.createNotificationChannel(this)
-        com.example.notification.NotificationWorker.enqueuePeriodicWork(this)
-        com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+        try {
+            com.example.notification.HostingerNotificationManager.createNotificationChannel(this)
+            com.example.notification.NotificationWorker.enqueuePeriodicWork(this)
+            com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+        } catch (_: Exception) {}
     }
 
     override fun newImageLoader(): ImageLoader {
@@ -42,7 +44,9 @@ class CineApplication : Application(), ImageLoaderFactory {
             .memoryCachePolicy(CachePolicy.ENABLED)
             .diskCachePolicy(CachePolicy.ENABLED)
             .networkCachePolicy(CachePolicy.ENABLED)
-            .crossfade(150) // Fast 150ms smooth crossfade without layout jank
+            .allowHardware(true)
+            .allowRgb565(true)
+            .crossfade(100) // Fast 100ms smooth crossfade without layout jank
             .respectCacheHeaders(false) // Cache even when server lacks cache-control to prevent repeated downloads
             .build()
     }

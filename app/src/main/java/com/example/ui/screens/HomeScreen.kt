@@ -40,6 +40,7 @@ import com.example.model.MatchItem
 import com.example.ui.UiState
 import com.example.ui.components.cineSharedBounds
 import com.example.ui.components.cineSharedElement
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 private fun formatPlaybackTime(ms: Long): String {
@@ -89,6 +90,17 @@ private fun formatToIST(startTime: String?): String {
 
     return "$trimmed IST"
 }
+
+private val MatchCardBackgroundGradient = Brush.verticalGradient(
+    colors = listOf(Color(0xFF1E1B4B), Color(0xFF312E81))
+)
+private val MatchCardOverlayGradient = Brush.verticalGradient(
+    colors = listOf(
+        Color.Black.copy(alpha = 0.25f),
+        Color.Black.copy(alpha = 0.4f),
+        Color.Black.copy(alpha = 0.85f)
+    )
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -165,11 +177,13 @@ fun HomeScreen(
                         }
                     }
 
-                    val matchRows = remember(matches, columns) { matches.chunked(columns) }
+                    val matchRows = remember(matches, columns) {
+                        if (columns > 1) matches.chunked(columns) else emptyList()
+                    }
 
                     LazyColumn(
                         contentPadding = PaddingValues(bottom = 16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
                         item(key = "featured_matches_title") {
@@ -241,7 +255,13 @@ fun HomeScreen(
                                         shape = RoundedCornerShape(20.dp),
                                         color = if (isSelected) CinePrimary else CineSurfaceVariant,
                                         border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
-                                        modifier = Modifier.height(36.dp)
+                                        modifier = Modifier
+                                            .height(36.dp)
+                                            .dpadFocusable(
+                                                shape = RoundedCornerShape(20.dp),
+                                                focusedBorderColor = Color.White,
+                                                scaleOnFocus = 1.06f
+                                            )
                                     ) {
                                         Box(
                                             contentAlignment = Alignment.Center,
@@ -270,6 +290,22 @@ fun HomeScreen(
                                     Text("No live matches available", color = CineTextSecondary)
                                 }
                             }
+                        } else if (columns == 1) {
+                            items(
+                                items = matches,
+                                key = { it.id },
+                                contentType = { "match_card" }
+                            ) { match ->
+                                Box(modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                                    val isFavorite = favorites.any { it.id == match.id }
+                                    MatchCard(
+                                        match = match,
+                                        isFavorite = isFavorite,
+                                        onWatchClick = { onMatchClick(match) },
+                                        onToggleFavorite = { onToggleFavorite(match) }
+                                    )
+                                }
+                            }
                         } else {
                             items(
                                 items = matchRows,
@@ -279,7 +315,7 @@ fun HomeScreen(
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                                        .padding(horizontal = 16.dp, vertical = 4.dp),
                                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                                 ) {
                                     for (match in matchRow) {
@@ -288,14 +324,7 @@ fun HomeScreen(
                                             MatchCard(
                                                 match = match,
                                                 isFavorite = isFavorite,
-                                                onWatchClick = {
-                                                    val rawStatus = match.status.trim().uppercase()
-                                                    val statusText = if (rawStatus.isEmpty()) "LIVE" else rawStatus
-                                                    val isLiveOrStreaming = statusText == "LIVE" || statusText == "FC LIVE" || statusText == "STREAMING" || statusText.contains("LIVE") || statusText.contains("STREAM")
-                                                    if (isLiveOrStreaming) {
-                                                        onMatchClick(match)
-                                                    }
-                                                },
+                                                onWatchClick = { onMatchClick(match) },
                                                 onToggleFavorite = { onToggleFavorite(match) }
                                             )
                                         }
@@ -322,9 +351,27 @@ fun MatchCard(
     onWatchClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
-    val rawStatus = match.status.trim().uppercase()
-    val statusText = if (rawStatus.isEmpty()) "LIVE" else rawStatus
-    val isLiveOrStreaming = statusText == "LIVE" || statusText == "FC LIVE" || statusText == "STREAMING" || statusText.contains("LIVE") || statusText.contains("STREAM")
+    val rawStatus = remember(match.status) { match.status.trim().uppercase() }
+    val statusText = remember(rawStatus) { if (rawStatus.isEmpty()) "LIVE" else rawStatus }
+    val isLiveOrStreaming = remember(statusText) {
+        statusText == "LIVE" || statusText == "FC LIVE" || statusText == "STREAMING" || statusText.contains("LIVE") || statusText.contains("STREAM")
+    }
+
+    val teamAName = remember(match.teamA?.shortCode, match.teamA?.name) {
+        formatShortCode(match.teamA?.shortCode, match.teamA?.name ?: "Team A")
+    }
+    val teamBName = remember(match.teamB?.shortCode, match.teamB?.name) {
+        formatShortCode(match.teamB?.shortCode, match.teamB?.name ?: "Team B")
+    }
+    val teamAShort = remember(match.teamA?.shortCode, match.teamA?.name) {
+        match.teamA?.shortCode?.take(3)?.uppercase() ?: match.teamA?.name?.take(3)?.uppercase() ?: "T1"
+    }
+    val teamBShort = remember(match.teamB?.shortCode, match.teamB?.name) {
+        match.teamB?.shortCode?.take(3)?.uppercase() ?: match.teamB?.name?.take(3)?.uppercase() ?: "T2"
+    }
+    val formattedTime = remember(match.startTime) {
+        formatToIST(match.startTime)
+    }
 
     Card(
         shape = RoundedCornerShape(20.dp),
@@ -333,14 +380,15 @@ fun MatchCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .cineSharedBounds("card_${match.id}")
-            .then(
-                if (isLiveOrStreaming) {
-                    Modifier.clickable(onClick = onWatchClick)
-                } else {
-                    Modifier
-                }
+            .dpadFocusable(
+                shape = RoundedCornerShape(20.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 3.dp,
+                scaleOnFocus = 1.04f,
+                elevationOnFocus = 8.dp
             )
+            .cineSharedBounds("card_${match.id}")
+            .clickable(onClick = onWatchClick)
     ) {
         Column {
             // Visual Banner Image / Poster with Team A vs Team B Overlay on Bottom
@@ -349,11 +397,7 @@ fun MatchCard(
                     .fillMaxWidth()
                     .height(180.dp)
                     .cineSharedElement("poster_${match.id}")
-                    .background(
-                        Brush.verticalGradient(
-                            colors = listOf(Color(0xFF1E1B4B), Color(0xFF312E81))
-                        )
-                    )
+                    .background(MatchCardBackgroundGradient)
             ) {
                 if (!match.poster.isNullOrEmpty()) {
                     AsyncImage(
@@ -368,15 +412,7 @@ fun MatchCard(
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
-                        .background(
-                            Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Black.copy(alpha = 0.25f),
-                                    Color.Black.copy(alpha = 0.4f),
-                                    Color.Black.copy(alpha = 0.85f)
-                                )
-                            )
-                        )
+                        .background(MatchCardOverlayGradient)
                 )
 
                 // Sport Tag Top Left
@@ -457,7 +493,7 @@ fun MatchCard(
                                     )
                                 } else {
                                     Text(
-                                        text = match.teamA?.shortCode?.take(3)?.uppercase() ?: match.teamA?.name?.take(3)?.uppercase() ?: "T1",
+                                        text = teamAShort,
                                         color = CinePrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp
@@ -467,7 +503,7 @@ fun MatchCard(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = formatShortCode(match.teamA?.shortCode, match.teamA?.name ?: "Team A"),
+                            text = teamAName,
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
@@ -503,7 +539,7 @@ fun MatchCard(
                         modifier = Modifier.weight(1f)
                     ) {
                         Text(
-                            text = formatShortCode(match.teamB?.shortCode, match.teamB?.name ?: "Team B"),
+                            text = teamBName,
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
@@ -528,7 +564,7 @@ fun MatchCard(
                                     )
                                 } else {
                                     Text(
-                                        text = match.teamB?.shortCode?.take(3)?.uppercase() ?: match.teamB?.name?.take(3)?.uppercase() ?: "T2",
+                                        text = teamBShort,
                                         color = CinePrimary,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 12.sp
@@ -622,7 +658,7 @@ fun MatchCard(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = formatToIST(match.startTime),
+                                text = formattedTime,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 12.sp,
                                 color = CineOnPrimaryContainer

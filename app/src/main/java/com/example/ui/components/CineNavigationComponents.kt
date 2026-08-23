@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -65,6 +66,7 @@ fun CineTopAppBar(
                     modifier = Modifier
                         .size(38.dp)
                         .background(CinePrimaryContainer, RoundedCornerShape(10.dp))
+                        .dpadFocusable(shape = RoundedCornerShape(10.dp), focusedBorderColor = Color.White)
                 ) {
                     Icon(
                         Icons.Default.Menu,
@@ -82,6 +84,7 @@ fun CineTopAppBar(
                 modifier = Modifier
                     .size(38.dp)
                     .background(CinePrimaryContainer, CircleShape)
+                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White)
             ) {
                 Icon(
                     imageVector = if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
@@ -107,6 +110,7 @@ fun CineTopAppBar(
                     .padding(end = 12.dp)
                     .size(38.dp)
                     .background(CinePrimaryContainer, CircleShape)
+                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White)
             ) {
                 Icon(
                     Icons.Default.Send,
@@ -136,7 +140,7 @@ fun CineBottomNavBar(
     modifier: Modifier = Modifier
 ) {
     val bottomTabs = remember {
-        listOf(CineTab.HOME, CineTab.SPORTS, CineTab.TV, CineTab.HISTORY)
+        listOf(CineTab.HOME, CineTab.SPORTS, CineTab.TV, CineTab.MOVIES)
     }
 
     NavigationBar(
@@ -157,6 +161,11 @@ fun CineBottomNavBar(
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                     )
                 },
+                modifier = Modifier.dpadFocusable(
+                    shape = RoundedCornerShape(12.dp),
+                    focusedBorderColor = CinePrimary,
+                    scaleOnFocus = 1.08f
+                ),
                 colors = NavigationBarItemDefaults.colors(
                     selectedIconColor = CineOnPrimaryContainer,
                     unselectedIconColor = CineTextSecondary,
@@ -172,7 +181,7 @@ fun CineBottomNavBar(
 @Composable
 fun CineDrawerContent(
     onOpenNetworkStream: () -> Unit,
-    onOpenMovies: () -> Unit = {},
+    onOpenHistory: () -> Unit = {},
     onOpenFavorites: () -> Unit = {},
     onCloseDrawer: () -> Unit
 ) {
@@ -235,11 +244,11 @@ fun CineDrawerContent(
         )
 
         DrawerMenuItem(
-            icon = Icons.Default.Movie,
-            title = "Movies (Requested)",
+            icon = Icons.Default.History,
+            title = "History",
             onClick = {
                 onCloseDrawer()
-                onOpenMovies()
+                onOpenHistory()
             }
         )
 
@@ -285,7 +294,7 @@ fun CineDrawerContent(
             onClick = {
                 val sendIntent = Intent().apply {
                     action = Intent.ACTION_SEND
-                    putExtra(Intent.EXTRA_TEXT, "Check out Cine Arena for live streaming: https://cinexcricket.com")
+                    putExtra(Intent.EXTRA_TEXT, "Check out Cine Arena for live cricket & streaming: https://cinexcricket.com/download/apk/")
                     type = "text/plain"
                 }
                 context.startActivity(Intent.createChooser(sendIntent, "Share Cine Arena"))
@@ -324,6 +333,11 @@ fun DrawerMenuItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(8.dp))
+            .dpadFocusable(
+                shape = RoundedCornerShape(8.dp),
+                focusedBorderColor = CinePrimary,
+                scaleOnFocus = 1.03f
+            )
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically

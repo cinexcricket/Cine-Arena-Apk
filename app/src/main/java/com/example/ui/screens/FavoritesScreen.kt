@@ -28,6 +28,7 @@ import com.example.data.FavoriteEntity
 import com.example.model.ChannelItem
 import com.example.ui.components.cineSharedBounds
 import com.example.ui.components.cineSharedElement
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 @Composable
@@ -98,11 +99,13 @@ fun FavoritesScreen(
             }
         }
 
-        val filteredList = favorites.filter { item ->
-            when (selectedFilter) {
-                "Matches" -> item.itemType == "match"
-                "TV Channels" -> item.itemType == "channel"
-                else -> true
+        val filteredList = remember(favorites, selectedFilter) {
+            favorites.filter { item ->
+                when (selectedFilter) {
+                    "Matches" -> item.itemType == "match"
+                    "TV Channels" -> item.itemType == "channel"
+                    else -> true
+                }
             }
         }
 
@@ -165,6 +168,14 @@ fun FavoriteCard(
     onPlay: () -> Unit,
     onRemove: () -> Unit
 ) {
+    val initialLetters = remember(item.title) {
+        item.title.take(2).uppercase()
+    }
+    val firstCat = remember(item.category, item.itemType) {
+        val cat = item.category.split(Regex("[,/|;]+")).firstOrNull()?.trim()
+        if (!cat.isNullOrBlank()) cat else item.itemType.uppercase()
+    }
+
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = CineSurface),
@@ -172,6 +183,13 @@ fun FavoriteCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .dpadFocusable(
+                shape = RoundedCornerShape(20.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 3.dp,
+                scaleOnFocus = 1.05f,
+                elevationOnFocus = 8.dp
+            )
             .cineSharedBounds("card_${item.id}")
             .clickable(onClick = onPlay)
     ) {
@@ -203,7 +221,7 @@ fun FavoriteCard(
                             )
                         } else {
                             Text(
-                                text = item.title.take(2).uppercase(),
+                                text = initialLetters,
                                 fontWeight = FontWeight.Bold,
                                 color = CinePrimary
                             )
@@ -248,9 +266,8 @@ fun FavoriteCard(
                     color = CineSurfaceVariant,
                     shape = RoundedCornerShape(6.dp)
                 ) {
-                    val firstCat = item.category.split(Regex("[,/|;]+")).firstOrNull()?.trim()
                     Text(
-                        text = if (!firstCat.isNullOrBlank()) firstCat else item.itemType.uppercase(),
+                        text = firstCat,
                         color = CineTextSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)

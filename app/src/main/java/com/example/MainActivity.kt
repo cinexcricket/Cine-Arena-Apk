@@ -39,7 +39,6 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import com.example.ads.StartAppHelper
 import com.example.player.CinePlayerView
 import com.example.ui.MainViewModel
 import com.example.ui.components.*
@@ -53,15 +52,12 @@ class MainActivity : ComponentActivity() {
 
     private val viewModel: MainViewModel by viewModels()
     private val isInPipModeState = mutableStateOf(false)
+    private var isPipSessionActive = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-
-        // Initialize Start.io SDK with App ID: 207109422
-        StartAppHelper.initialize(this)
-        StartAppHelper.preloadExitAd(this)
 
         // Initialize Android notification channel for broadcast alerts from cinexcricket.com
         com.example.notification.HostingerNotificationManager.createNotificationChannel(this)
@@ -98,6 +94,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // If user returned to full app from PiP, reset PiP session active flag
+        isPipSessionActive = isInPictureInPictureMode
         com.example.notification.HostingerNotificationManager.setAppForegroundState(true)
     }
 
@@ -105,10 +103,15 @@ class MainActivity : ComponentActivity() {
         super.onPause()
         com.example.notification.HostingerNotificationManager.setAppForegroundState(false)
         com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
+        // If not in PiP mode and not changing configuration and finishing:
+        if (!isInPictureInPictureMode && (isFinishing || isDestroyed)) {
+            viewModel.closePlayer()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        isPipSessionActive = false
         viewModel.closePlayer()
         com.example.notification.HostingerNotificationManager.setAppForegroundState(false)
         com.example.notification.NotificationAlarmReceiver.scheduleAlarm(this)
@@ -150,23 +153,34 @@ class MainActivity : ComponentActivity() {
         newConfig: Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        val wasInPip = isInPipModeState.value
         isInPipModeState.value = isInPictureInPictureMode
-
-        if (wasInPip && !isInPictureInPictureMode) {
-            // If exiting PiP and not returning to active foreground app, user closed PiP window
-            window.decorView.post {
-                if (lifecycle.currentState != androidx.lifecycle.Lifecycle.State.RESUMED) {
-                    viewModel.closePlayer()
-                }
+        if (isInPictureInPictureMode) {
+            isPipSessionActive = true
+        } else {
+            // When exiting floating PiP mode:
+            // If user closed the floating PiP window ('X' button or dragged to dismiss), Android finishes the activity or puts it in CREATED state.
+            // When not actively finishing yet, if activity is not resumed/started, it was dismissed.
+            if (isFinishing || isDestroyed || !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) {
+                isPipSessionActive = false
+                viewModel.closePlayer()
+                finishAndRemoveTask()
             }
         }
     }
 
     override fun onStop() {
         super.onStop()
-        if (isFinishing) {
+        // If floating PiP window was closed/dismissed by user:
+        if (isPipSessionActive && !isInPictureInPictureMode) {
+            isPipSessionActive = false
             viewModel.closePlayer()
+            finishAndRemoveTask()
+        } else if (!isInPictureInPictureMode && !isChangingConfigurations) {
+            if (isFinishing || isDestroyed) {
+                isPipSessionActive = false
+                viewModel.closePlayer()
+                finishAndRemoveTask()
+            }
         }
     }
 
@@ -328,7 +342,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                 isPlayerFullscreen = false
                 activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             }
-            activeChannel != null -> {
+            activeChannel != null && isPlayerExpanded -> {
+                // Minimize to in-app floating mini-player so user can browse app
+                isPlayerExpanded = false
+                isPlayerFullscreen = false
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            }
+            activeChannel != null && !isPlayerExpanded -> {
+                // Close player completely if back is pressed while already in mini player
                 closePlayerAndReturn()
             }
             selectedTab != CineTab.HOME -> {
@@ -338,7 +359,6 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                 showExitDialog = false
             }
             else -> {
-                activity?.let { StartAppHelper.preloadExitAd(it) }
                 showExitDialog = true
             }
         }
@@ -409,7 +429,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             isPlayerFullscreen = false
                             activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                         } else {
-                            closePlayerAndReturn()
+                            // In portrait: minimize to in-app floating mini player so user can browse
+                            isPlayerExpanded = false
                         }
                     },
                     onFullscreenToggle = { fs ->
@@ -439,15 +460,10 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                         }
                     },
                     onEnterPipClick = {
-                        if (isPlayerExpanded) {
-                            if (isPlayerFullscreen) {
-                                isPlayerFullscreen = false
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-                            }
-                            isPlayerExpanded = false
-                        } else {
-                            enterPipMode()
-                        }
+                        // Collapse to in-app PiP floating mini player
+                        isPlayerFullscreen = false
+                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        isPlayerExpanded = false
                     },
                     onCloseClick = { closePlayerAndReturn() },
                     onPlaybackProgress = { pos, dur ->
@@ -506,7 +522,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
             ) {
                 CineDrawerContent(
                     onOpenNetworkStream = { showNetworkStreamDialog = true },
-                    onOpenMovies = { selectedTab = CineTab.MOVIES },
+                    onOpenHistory = { selectedTab = CineTab.HISTORY },
                     onOpenFavorites = { selectedTab = CineTab.FAVORITES },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
@@ -533,10 +549,11 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                         selectedTab = selectedTab,
                         onTabSelected = { tab ->
                             if (tab != selectedTab) {
-                                viewModel.closePlayer()
-                                isPlayerExpanded = false
-                                isPlayerFullscreen = false
-                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                if (activeChannel != null) {
+                                    isPlayerExpanded = false
+                                    isPlayerFullscreen = false
+                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                }
                             }
                             selectedTab = tab
                         }
@@ -681,8 +698,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                         lastSourceTab = CineTab.HOME
                                         isPlayerExpanded = true
                                         isPlayerFullscreen = false
-                                        viewModel.playMatch(match)
                                         selectedTab = CineTab.HOME
+                                        viewModel.playMatch(match)
                                     },
                                     onToggleFavorite = { match -> viewModel.toggleFavoriteMatch(match) },
                                     onRefresh = { viewModel.fetchHomeMatches(isPullRefresh = true) },
@@ -765,8 +782,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                             streamType = fav.streamType,
                                             streamUrl = fav.streamUrl
                                         )
-                                        viewModel.playChannel(favChannel)
                                         selectedTab = CineTab.FAVORITES
+                                        viewModel.playChannel(favChannel)
                                     },
                                     onRemoveFavorite = { fav ->
                                         val favChannel = com.example.model.ChannelItem(
@@ -823,8 +840,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                                     .pointerInput(Unit) {
                                                         detectDragGestures { change, dragAmount ->
                                                             change.consume()
-                                                            offsetX += dragAmount.x
-                                                            offsetY += dragAmount.y
+                                                             offsetX += dragAmount.x
+                                                             offsetY += dragAmount.y
                                                         }
                                                     }
                                             ) {
@@ -853,7 +870,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     )
                                 }
 
-                                // Exit Confirmation Dialog with Start.io Exit Interstitial Ad
+                                // Exit Confirmation Dialog
                                 if (showExitDialog) {
                                     AlertDialog(
                                         onDismissRequest = { showExitDialog = false },
@@ -878,11 +895,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                             Button(
                                                 onClick = {
                                                     showExitDialog = false
-                                                    if (activity != null) {
-                                                        StartAppHelper.showExitInterstitial(activity) {
-                                                            activity.finish()
-                                                        }
-                                                    }
+                                                    activity?.finish()
                                                 },
                                                 colors = ButtonDefaults.buttonColors(
                                                     containerColor = MaterialTheme.colorScheme.primary

@@ -1,0 +1,31 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+  <path
+      android:pathData="M0,0h320v180h-320z"
+      android:fillColor="#0D1322"/>
+  <path
+      android:pathData="M0,0h320v180h-320z"
+      android:fillColor="#131B2E"/>
+  <!-- Decorative glowing gradient shape -->
+  <path
+      android:pathData="M160,25 C210,25 250,55 250,90 C250,125 210,155 160,155 C110,155 70,125 70,90 C70,55 110,25 160,25 Z"
+      android:fillColor="#1E293B"/>
+  <!-- App Icon Symbol (Play inside glowing badge) -->
+  <path
+      android:pathData="M160,45 A45,45 0 1,0 160,135 A45,45 0 1,0 160,45 Z"
+      android:fillColor="#2B62F6"/>
+  <!-- Play triangle -->
+  <path
+      android:pathData="M152,72 L174,90 L152,108 Z"
+      android:fillColor="#FFFFFF"/>
+  <!-- Live tag accent -->
+  <path
+      android:pathData="M142,146 h36 v14 h-36 z"
+      android:fillColor="#E50914"/>
+  <path
+      android:pathData="M146,150 h4 v6 h-4 z"
+      android:fillColor="#FFFFFF"/>
+</vector>

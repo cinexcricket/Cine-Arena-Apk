@@ -50,11 +50,11 @@ class NotificationAlarmReceiver : BroadcastReceiver() {
         private const val INTERVAL_MS = 10_000L // Fast 10-second interval when in background
 
         fun scheduleAlarm(context: Context) {
-            scheduleAlarmAt(context, System.currentTimeMillis() + 3_000L)
+            scheduleAlarmAt(context, System.currentTimeMillis() + 15_000L)
         }
 
         fun scheduleNextAlarm(context: Context) {
-            scheduleAlarmAt(context, System.currentTimeMillis() + INTERVAL_MS)
+            scheduleAlarmAt(context, System.currentTimeMillis() + 60_000L)
         }
 
         private fun scheduleAlarmAt(context: Context, triggerAtMillis: Long) {
@@ -68,9 +68,12 @@ class NotificationAlarmReceiver : BroadcastReceiver() {
                 }
                 val pendingIntent = PendingIntent.getBroadcast(context, REQUEST_CODE, intent, flags)
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                    val info = AlarmManager.AlarmClockInfo(triggerAtMillis, pendingIntent)
-                    alarmManager.setAlarmClock(info, pendingIntent)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (alarmManager.canScheduleExactAlarms()) {
+                        alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    } else {
+                        alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
+                    }
                 } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
                 } else {

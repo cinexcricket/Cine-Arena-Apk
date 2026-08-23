@@ -25,6 +25,7 @@ data class ChatMessageEntity(
     val senderPhone: String,
     val text: String,
     val timestamp: Long = System.currentTimeMillis(),
+    val formattedTime: String = "",
     val isMe: Boolean = true
 )
 

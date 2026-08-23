@@ -33,6 +33,7 @@ import coil.compose.AsyncImage
 import com.example.data.ContinueWatchingEntity
 import com.example.ui.components.cineSharedBounds
 import com.example.ui.components.cineSharedElement
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 private fun formatPlaybackTime(ms: Long): String {
@@ -349,7 +350,9 @@ fun HistoryContinueWatchingCard(
         }
     }
 
-    val imageUrl = item.poster.ifBlank { item.background }
+    val imageUrl = remember(item.poster, item.background) {
+        item.poster.ifBlank { item.background }
+    }
 
     Surface(
         onClick = onClick,
@@ -360,6 +363,12 @@ fun HistoryContinueWatchingCard(
         modifier = modifier
             .width(200.dp)
             .height(140.dp)
+            .dpadFocusable(
+                shape = RoundedCornerShape(12.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 2.5.dp,
+                scaleOnFocus = 1.05f
+            )
             .cineSharedBounds("card_${item.id}")
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -537,7 +546,9 @@ fun HistoryListItem(
         formatRelativeTime(item.lastWatchedTimestamp)
     }
 
-    val imageUrl = item.poster.ifBlank { item.background }
+    val imageUrl = remember(item.poster, item.background) {
+        item.poster.ifBlank { item.background }
+    }
 
     Surface(
         onClick = onClick,
@@ -548,6 +559,12 @@ fun HistoryListItem(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
+            .dpadFocusable(
+                shape = RoundedCornerShape(12.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 2.5.dp,
+                scaleOnFocus = 1.03f
+            )
             .cineSharedBounds("card_hist_${item.id}")
     ) {
         Row(

@@ -35,6 +35,7 @@ import com.example.model.ChannelItem
 import com.example.ui.UiState
 import com.example.ui.components.cineSharedBounds
 import com.example.ui.components.cineSharedElement
+import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -217,7 +218,13 @@ fun SportsScreen(
                         shape = RoundedCornerShape(20.dp),
                         color = if (isSelected) CinePrimary else CineSurfaceVariant,
                         border = if (!isSelected) BorderStroke(1.dp, CineOutline) else null,
-                        modifier = Modifier.height(36.dp)
+                        modifier = Modifier
+                            .height(36.dp)
+                            .dpadFocusable(
+                                shape = RoundedCornerShape(20.dp),
+                                focusedBorderColor = Color.White,
+                                scaleOnFocus = 1.06f
+                            )
                     ) {
                         Box(
                             contentAlignment = Alignment.Center,
@@ -254,14 +261,16 @@ fun SportsScreen(
                 }
             }
             is UiState.Success -> {
-                val filteredSports = sportsChannelsState.data.filter { channel ->
-                    val matchesCategory = if (selectedCategory == "All Sports" || selectedCategory == "All") true
-                    else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
+                val filteredSports = remember(sportsChannelsState.data, selectedCategory, searchQuery) {
+                    sportsChannelsState.data.filter { channel ->
+                        val matchesCategory = if (selectedCategory == "All Sports" || selectedCategory == "All") true
+                        else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
 
-                    val matchesSearch = if (searchQuery.isBlank()) true
-                    else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
+                        val matchesSearch = if (searchQuery.isBlank()) true
+                        else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
 
-                    matchesCategory && matchesSearch
+                        matchesCategory && matchesSearch
+                    }
                 }
 
                 if (filteredSports.isEmpty()) {
@@ -307,6 +316,17 @@ fun SportsCard(
     onChannelClick: () -> Unit,
     onToggleFavorite: () -> Unit
 ) {
+    val imageUrl = remember(channel.logo, channel.background) {
+        if (!channel.logo.isNullOrEmpty()) channel.logo else channel.background
+    }
+    val rawStatus = remember(channel.status) { channel.status.trim().uppercase() }
+    val isLive = remember(rawStatus) {
+        rawStatus.isEmpty() || rawStatus == "LIVE" || rawStatus.contains("LIVE") || rawStatus.contains("STREAM")
+    }
+    val initialLetters = remember(channel.name) {
+        channel.name.take(2).uppercase()
+    }
+
     Card(
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(containerColor = CineSurface),
@@ -314,6 +334,13 @@ fun SportsCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .dpadFocusable(
+                shape = RoundedCornerShape(20.dp),
+                focusedBorderColor = CinePrimary,
+                focusedBorderWidth = 3.dp,
+                scaleOnFocus = 1.05f,
+                elevationOnFocus = 8.dp
+            )
             .cineSharedBounds("card_${channel.id}")
             .clickable(onClick = onChannelClick)
     ) {
@@ -336,7 +363,6 @@ fun SportsCard(
                         .cineSharedElement("poster_${channel.id}")
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        val imageUrl = if (!channel.logo.isNullOrEmpty()) channel.logo else channel.background
                         if (!imageUrl.isNullOrEmpty()) {
                             AsyncImage(
                                 model = imageUrl,
@@ -348,7 +374,7 @@ fun SportsCard(
                             )
                         } else {
                             Text(
-                                text = channel.name.take(2).uppercase(),
+                                text = initialLetters,
                                 fontWeight = FontWeight.Bold,
                                 color = CinePrimary,
                                 fontSize = 16.sp
@@ -407,8 +433,6 @@ fun SportsCard(
                 }
 
                 // ● LIVE tag
-                val rawStatus = channel.status.trim().uppercase()
-                val isLive = rawStatus.isEmpty() || rawStatus == "LIVE" || rawStatus.contains("LIVE") || rawStatus.contains("STREAM")
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         modifier = Modifier

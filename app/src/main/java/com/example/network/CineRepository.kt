@@ -128,19 +128,50 @@ class CineRepository(
         )
     }
 
-    fun getChatMessages(matchId: String): Flow<List<ChatMessageEntity>>? {
+    fun getChatMessages(matchId: String = "global_live"): Flow<List<ChatMessageEntity>>? {
         return chatDao?.getMessagesForMatch(matchId)
     }
 
-    suspend fun saveChatMessage(matchId: String, senderName: String, senderPhone: String, text: String) {
+    suspend fun saveChatMessage(
+        matchId: String = "global_live",
+        senderName: String,
+        senderPhone: String,
+        text: String,
+        timestamp: Long = System.currentTimeMillis(),
+        formattedTime: String = com.example.util.IstTimeHelper.currentIstFormatted(),
+        isMe: Boolean = true
+    ) {
         val entity = ChatMessageEntity(
-            id = System.currentTimeMillis().toString(),
+            id = System.currentTimeMillis().toString() + "_" + (100..999).random(),
             matchId = matchId,
             senderName = senderName,
             senderPhone = senderPhone,
             text = text,
-            timestamp = System.currentTimeMillis(),
-            isMe = true
+            timestamp = timestamp,
+            formattedTime = formattedTime,
+            isMe = isMe
+        )
+        chatDao?.insertChatMessage(entity)
+    }
+
+    suspend fun saveRemoteChatMessage(
+        id: String,
+        matchId: String = "global_live",
+        senderName: String,
+        senderPhone: String,
+        text: String,
+        timestamp: Long = System.currentTimeMillis(),
+        formattedTime: String = com.example.util.IstTimeHelper.currentIstFormatted()
+    ) {
+        val entity = ChatMessageEntity(
+            id = id,
+            matchId = matchId,
+            senderName = senderName,
+            senderPhone = senderPhone,
+            text = text,
+            timestamp = timestamp,
+            formattedTime = formattedTime,
+            isMe = false
         )
         chatDao?.insertChatMessage(entity)
     }

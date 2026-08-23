@@ -75,6 +75,11 @@ import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.compose.ui.input.key.*
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.foundation.focusable
+import com.example.ui.components.dpadFocusable
 import com.example.model.DrmConfig
 import kotlinx.coroutines.delay
 
@@ -322,6 +327,15 @@ fun ExoStreamPlayer(
     var retryCount by remember { mutableIntStateOf(0) }
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
+    val playerFocusRequester = remember { FocusRequester() }
+
+    LaunchedEffect(Unit) {
+        try {
+            playerFocusRequester.requestFocus()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
     val audioManager = remember(context) { context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }
     var brightnessLevel by remember {
@@ -555,13 +569,13 @@ fun ExoStreamPlayer(
 
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
-                    2500,   // minBufferMs (2.5s)
-                    50000,  // maxBufferMs (50s)
-                    1000,   // bufferForPlaybackMs (1s - start playback immediately)
-                    2000    // bufferForPlaybackAfterRebufferMs (2s)
+                    500,    // minBufferMs (0.5s)
+                    20000,  // maxBufferMs (20s)
+                    100,    // bufferForPlaybackMs (0.1s - start playback instantly)
+                    250     // bufferForPlaybackAfterRebufferMs (0.25s)
                 )
                 .setBackBuffer(
-                    30000,  // backBufferDurationMs (30s)
+                    10000,  // backBufferDurationMs (10s)
                     true
                 )
                 .setPrioritizeTimeOverSizeThresholds(true)
@@ -605,6 +619,36 @@ fun ExoStreamPlayer(
         } catch (e: Exception) {
             e.printStackTrace()
             null
+        }
+    }
+
+    // Lifecycle observer ensures video and audio pause/release immediately when app or PiP is closed/stopped
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, exoPlayer) {
+        val player = exoPlayer ?: return@DisposableEffect onDispose {}
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val inPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    if (!inPip && activity?.isChangingConfigurations != true) {
+                        player.pause()
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    if (player.playWhenReady && !player.isPlaying && player.playbackState == Player.STATE_READY) {
+                        player.play()
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
+                    player.stop()
+                    player.release()
+                }
+                else -> {}
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -729,6 +773,12 @@ fun ExoStreamPlayer(
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+            try {
+                player.stop()
+                player.clearMediaItems()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
             player.release()
         }
     }
@@ -787,6 +837,13 @@ fun ExoStreamPlayer(
                     update = { playerView ->
                         playerView.player = exoPlayer
                         playerView.keepScreenOn = isPlaying
+                    },
+                    onRelease = { playerView ->
+                        try {
+                            playerView.player = null
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
                     },
                     modifier = Modifier.fillMaxSize()
                 )
@@ -929,6 +986,93 @@ fun ExoStreamPlayer(
         Box(
             modifier = (if (isFullscreen) modifier.fillMaxSize() else modifier.fillMaxWidth())
                 .background(Color.Black)
+                .focusRequester(playerFocusRequester)
+                .focusable()
+                .onKeyEvent { keyEvent ->
+                    if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                    val player = exoPlayer
+                    when (keyEvent.nativeKeyEvent.keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                            if (showControls) {
+                                if (isPlaying) {
+                                    player?.pause()
+                                    isPlaying = false
+                                } else {
+                                    player?.play()
+                                    isPlaying = true
+                                }
+                            } else {
+                                showControls = true
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                            if (isPlaying) {
+                                player?.pause()
+                                isPlaying = false
+                            } else {
+                                player?.play()
+                                isPlaying = true
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
+                            player?.play()
+                            isPlaying = true
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                            player?.pause()
+                            isPlaying = false
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        android.view.KeyEvent.KEYCODE_MEDIA_REWIND,
+                        android.view.KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
+                            if (player != null) {
+                                val target = (player.currentPosition - 10000L).coerceAtLeast(0L)
+                                player.seekTo(target)
+                                currentPosition = target
+                                showControls = true
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+                        android.view.KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+                            if (player != null) {
+                                val rawDur = player.duration
+                                val validDur = if (rawDur != C.TIME_UNSET && rawDur > 0) rawDur else duration
+                                val target = if (validDur > 0) {
+                                    (player.currentPosition + 10000L).coerceAtMost(validDur)
+                                } else {
+                                    player.currentPosition + 10000L
+                                }
+                                player.seekTo(target)
+                                currentPosition = target
+                                showControls = true
+                            }
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_DPAD_UP,
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                        android.view.KeyEvent.KEYCODE_MENU -> {
+                            showControls = !showControls
+                            true
+                        }
+                        android.view.KeyEvent.KEYCODE_BACK -> {
+                            if (showControls) {
+                                showControls = false
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        else -> false
+                    }
+                }
                 .pointerInput(isScreenLocked, isFullscreen) {
                     if (isScreenLocked) return@pointerInput
                     detectVerticalDragGestures(
@@ -1063,6 +1207,13 @@ fun ExoStreamPlayer(
                         subView.setUserDefaultTextSize()
                     }
                 },
+                onRelease = { playerView ->
+                    try {
+                        playerView.player = null
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
                 modifier = Modifier.fillMaxSize()
             )
 
@@ -1192,6 +1343,7 @@ fun ExoStreamPlayer(
                                 modifier = Modifier
                                     .size(36.dp)
                                     .background(Color.White.copy(alpha = 0.15f), CircleShape)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White, scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     Icons.AutoMirrored.Filled.ArrowBack,
@@ -1252,7 +1404,9 @@ fun ExoStreamPlayer(
 
                             IconButton(
                                 onClick = { showLanguageDialog = true },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_audiotrack),
@@ -1264,7 +1418,9 @@ fun ExoStreamPlayer(
 
                             IconButton(
                                 onClick = { showQualityDialog = true },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_settings),
@@ -1276,7 +1432,9 @@ fun ExoStreamPlayer(
 
                             IconButton(
                                 onClick = { showCaptionDialog = true },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     painter = painterResource(
@@ -1299,7 +1457,9 @@ fun ExoStreamPlayer(
                                         showLockOverlay = true
                                         aspectToastText = "Screen Locked"
                                     },
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier
+                                        .size(32.dp)
+                                        .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                                 ) {
                                     Icon(
                                         imageVector = Icons.Default.Lock,
@@ -1329,6 +1489,7 @@ fun ExoStreamPlayer(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_rewind),
@@ -1353,6 +1514,7 @@ fun ExoStreamPlayer(
                                 modifier = Modifier
                                     .size(60.dp)
                                     .background(Color(0xFF2B62F6), CircleShape)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White, scaleOnFocus = 1.15f)
                             ) {
                                 if (isBuffering) {
                                     CircularProgressIndicator(
@@ -1393,6 +1555,7 @@ fun ExoStreamPlayer(
                                 modifier = Modifier
                                     .size(48.dp)
                                     .background(Color.White.copy(alpha = 0.2f), CircleShape)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                             ) {
                                 Icon(
                                     painter = painterResource(androidx.media3.ui.R.drawable.exo_styled_controls_fastforward),
@@ -1465,7 +1628,13 @@ fun ExoStreamPlayer(
                                     Surface(
                                         color = Color.White.copy(alpha = 0.2f),
                                         shape = RoundedCornerShape(8.dp),
-                                        modifier = Modifier.clickable { showQualityDialog = true }
+                                        modifier = Modifier
+                                            .dpadFocusable(
+                                                shape = RoundedCornerShape(8.dp),
+                                                focusedBorderColor = Color(0xFF00E5FF),
+                                                scaleOnFocus = 1.1f
+                                            )
+                                            .clickable { showQualityDialog = true }
                                     ) {
                                         Text(
                                             text = selectedQualityLabel,
@@ -1482,7 +1651,13 @@ fun ExoStreamPlayer(
                                     Surface(
                                         color = Color.White.copy(alpha = 0.2f),
                                         shape = RoundedCornerShape(8.dp),
-                                        modifier = Modifier.clickable { showSpeedDialog = true }
+                                        modifier = Modifier
+                                            .dpadFocusable(
+                                                shape = RoundedCornerShape(8.dp),
+                                                focusedBorderColor = Color(0xFF00E5FF),
+                                                scaleOnFocus = 1.1f
+                                            )
+                                            .clickable { showSpeedDialog = true }
                                     ) {
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
@@ -1534,7 +1709,9 @@ fun ExoStreamPlayer(
                                                 }
                                             }
                                         },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.1f)
                                     ) {
                                         Icon(
                                             imageVector = aspectIcon,
@@ -1550,7 +1727,9 @@ fun ExoStreamPlayer(
                                         onClick = {
                                             onEnterPipClick()
                                         },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.1f)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.PictureInPictureAlt,
@@ -1563,7 +1742,9 @@ fun ExoStreamPlayer(
 
                                     IconButton(
                                         onClick = { onFullscreenToggle(!isFullscreen) },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.1f)
                                     ) {
                                         Icon(
                                             painter = painterResource(
@@ -2179,6 +2360,56 @@ fun IframeStreamPlayer(
     var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
     var showSpeedDialog by remember { mutableStateOf(false) }
 
+    // Observe lifecycle to pause/resume/destroy WebView audio and timers
+    val iframeLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(iframeLifecycleOwner, webViewRef, webViewInstance) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            val inPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
+            when (event) {
+                androidx.lifecycle.Lifecycle.Event.ON_PAUSE,
+                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
+                    if (!inPip) {
+                        try {
+                            webViewRef?.onPause()
+                            webViewRef?.pauseTimers()
+                            webViewInstance?.onPause()
+                            webViewInstance?.pauseTimers()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                    try {
+                        webViewRef?.onResume()
+                        webViewRef?.resumeTimers()
+                        webViewInstance?.onResume()
+                        webViewInstance?.resumeTimers()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
+                    try {
+                        webViewRef?.loadUrl("about:blank")
+                        webViewRef?.stopLoading()
+                        webViewRef?.destroy()
+                        webViewInstance?.loadUrl("about:blank")
+                        webViewInstance?.stopLoading()
+                        webViewInstance?.destroy()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+                else -> {}
+            }
+        }
+        iframeLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            iframeLifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
     val activeCustomView = customView
     if (activeCustomView != null) {
         Dialog(
@@ -2230,11 +2461,36 @@ fun IframeStreamPlayer(
                             settings.domStorageEnabled = true
                             settings.mediaPlaybackRequiresUserGesture = false
                             settings.databaseEnabled = true
+                            settings.setSupportMultipleWindows(false)
+                            settings.javaScriptCanOpenWindowsAutomatically = false
                             webViewClient = object : WebViewClient() {
+                                override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                    val targetUrl = request?.url?.toString() ?: return false
+                                    // Block external intents or market links attempting to hijack stream
+                                    if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                                        return true
+                                    }
+                                    if (targetUrl.contains("play.google.com", ignoreCase = true) || targetUrl.contains("market://", ignoreCase = true)) {
+                                        return true
+                                    }
+                                    return false
+                                }
+
+                                @Deprecated("Deprecated in Java")
+                                override fun shouldOverrideUrlLoading(view: WebView?, targetUrl: String?): Boolean {
+                                    if (targetUrl == null) return false
+                                    if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                                        return true
+                                    }
+                                    if (targetUrl.contains("play.google.com", ignoreCase = true) || targetUrl.contains("market://", ignoreCase = true)) {
+                                        return true
+                                    }
+                                    return false
+                                }
+
                                 override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                                     try {
-                                        view?.stopLoading()
-                                        view?.loadUrl("about:blank")
+                                        (view?.parent as? ViewGroup)?.removeView(view)
                                         view?.destroy()
                                     } catch (e: Exception) {
                                         e.printStackTrace()
@@ -2243,6 +2499,10 @@ fun IframeStreamPlayer(
                                 }
                             }
                             webChromeClient = object : WebChromeClient() {
+                                override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
+                                    return false
+                                }
+
                                 override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                     customView = view
                                     customViewCallback = callback
@@ -2261,13 +2521,20 @@ fun IframeStreamPlayer(
                             if (url.startsWith("http")) loadUrl(url)
                             else if (url.contains("<iframe")) loadDataWithBaseURL("https://cinexcricket.com", url, "text/html", "UTF-8", null)
                             else loadUrl(url)
+                            webViewRef = this
+                            webViewInstance = this
                         }
+                    },
+                    update = { webView ->
+                        webViewRef = webView
+                        webViewInstance = webView
                     },
                     onRelease = { webView ->
                         try {
                             webView.stopLoading()
                             webView.loadUrl("about:blank")
                             webView.onPause()
+                            webView.pauseTimers()
                             webView.removeAllViews()
                             webView.destroy()
                         } catch (e: Exception) {
@@ -2453,12 +2720,37 @@ fun IframeStreamPlayer(
                         settings.domStorageEnabled = true
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.databaseEnabled = true
+                        settings.setSupportMultipleWindows(false)
+                        settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.userAgentString = "Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 Chrome/120.0.0.0 Mobile Safari/537.36"
                         webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: android.webkit.WebResourceRequest?): Boolean {
+                                val targetUrl = request?.url?.toString() ?: return false
+                                // Block external intents or market links attempting to hijack stream
+                                if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                                    return true
+                                }
+                                if (targetUrl.contains("play.google.com", ignoreCase = true) || targetUrl.contains("market://", ignoreCase = true)) {
+                                    return true
+                                }
+                                return false
+                            }
+
+                            @Deprecated("Deprecated in Java")
+                            override fun shouldOverrideUrlLoading(view: WebView?, targetUrl: String?): Boolean {
+                                if (targetUrl == null) return false
+                                if (!targetUrl.startsWith("http://", ignoreCase = true) && !targetUrl.startsWith("https://", ignoreCase = true)) {
+                                    return true
+                                }
+                                if (targetUrl.contains("play.google.com", ignoreCase = true) || targetUrl.contains("market://", ignoreCase = true)) {
+                                    return true
+                                }
+                                return false
+                            }
+
                             override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
                                 try {
-                                    view?.stopLoading()
-                                    view?.loadUrl("about:blank")
+                                    (view?.parent as? ViewGroup)?.removeView(view)
                                     view?.destroy()
                                 } catch (e: Exception) {
                                     e.printStackTrace()
@@ -2467,6 +2759,10 @@ fun IframeStreamPlayer(
                             }
                         }
                         webChromeClient = object : WebChromeClient() {
+                            override fun onCreateWindow(view: WebView?, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
+                                return false
+                            }
+
                             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                 customView = view
                                 customViewCallback = callback
@@ -2493,10 +2789,12 @@ fun IframeStreamPlayer(
                             loadUrl(url)
                         }
                         webViewRef = this
+                        webViewInstance = this
                     }
                 },
                 update = { webView ->
                     webViewRef = webView
+                    webViewInstance = webView
                     val js = getIframeScalingJs(resizeMode)
                     webView.evaluateJavascript(js, null)
                 },
@@ -2505,6 +2803,7 @@ fun IframeStreamPlayer(
                         webView.stopLoading()
                         webView.loadUrl("about:blank")
                         webView.onPause()
+                        webView.pauseTimers()
                         webView.removeAllViews()
                         webView.destroy()
                     } catch (e: Exception) {
