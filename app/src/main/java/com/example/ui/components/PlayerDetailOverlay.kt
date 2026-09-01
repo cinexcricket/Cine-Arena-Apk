@@ -1,5 +1,6 @@
 package com.example.ui.components
 
+import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Group
 import androidx.compose.material.icons.filled.HighQuality
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Person
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.filled.Sensors
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.material3.*
@@ -51,6 +54,7 @@ fun PlayerDetailOverlay(
     chatMessages: List<ChatMessage>,
     userProfile: UserProfileEntity? = null,
     liveLikesCount: Int = 1240,
+    activeStreamViewers: Int = 1420,
     showProfileDialog: Boolean = false,
     onChannelSelect: (ChannelItem) -> Unit,
     onSendMessage: (String) -> Unit,
@@ -241,6 +245,8 @@ fun PlayerDetailOverlay(
                                 color = CineTextPrimary
                             )
                             Spacer(modifier = Modifier.width(6.dp))
+
+                            // Live IST Clock Pill
                             Surface(
                                 color = CinePrimary.copy(alpha = 0.12f),
                                 shape = RoundedCornerShape(4.dp),
@@ -264,6 +270,34 @@ fun PlayerDetailOverlay(
                                     )
                                 }
                             }
+
+                            Spacer(modifier = Modifier.width(4.dp))
+
+                            // Real-Time Live Viewers Pill with Pulsing Live Dot
+                            Surface(
+                                color = Color(0xFF22C55E).copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(0.5.dp, Color(0xFF22C55E).copy(alpha = 0.4f))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(5.dp)
+                                            .background(Color(0xFF22C55E), CircleShape)
+                                    )
+                                    Spacer(modifier = Modifier.width(3.dp))
+                                    Text(
+                                        text = "${formatLiveCount(activeStreamViewers)} Watching",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF22C55E)
+                                    )
+                                }
+                            }
+
                             Spacer(modifier = Modifier.width(2.dp))
                             IconButton(
                                 onClick = { showDatabaseGuideModal = true },
@@ -599,7 +633,7 @@ private fun ProfileSetupDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    "Set your display name and mobile number. Optionally connect your Hostinger API URL for live cross-device syncing.",
+                    "Set your display name and mobile number to participate in the live match chat.",
                     fontSize = 12.sp,
                     color = CineTextSecondary
                 )
@@ -621,16 +655,6 @@ private fun ProfileSetupDialog(
                     placeholder = { Text("e.g. +91 9876543210") },
                     singleLine = true,
                     leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null, tint = CinePrimary) },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                OutlinedTextField(
-                    value = hostingerUrl,
-                    onValueChange = { hostingerUrl = it },
-                    label = { Text("Hostinger API URL (Optional)") },
-                    placeholder = { Text("https://yourdomain.com/api/chat.php") },
-                    singleLine = true,
-                    leadingIcon = { Icon(Icons.Default.Sensors, contentDescription = null, tint = CinePrimary) },
                     modifier = Modifier.fillMaxWidth()
                 )
 

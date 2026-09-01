@@ -3,6 +3,8 @@ package com.example.ui.components
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -17,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +28,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.components.dpadFocusable
 import com.example.ui.theme.*
+import java.util.Locale
+
+fun formatLiveCount(count: Int): String {
+    return when {
+        count >= 1_000_000 -> String.format(Locale.ENGLISH, "%.1fM", count / 1_000_000.0)
+        count >= 10_000 -> String.format(Locale.ENGLISH, "%.1fk", count / 1000.0)
+        count >= 1_000 -> String.format(Locale.ENGLISH, "%,d", count)
+        else -> count.toString()
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,18 +56,18 @@ fun CineTopAppBar(
         title = {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 12.dp)
+                modifier = Modifier.padding(start = 6.dp)
             ) {
                 Text(
                     text = "Cine ",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
+                    fontSize = 19.sp,
                     color = CineTextPrimary
                 )
                 Text(
                     text = "Arena",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 20.sp,
+                    fontSize = 19.sp,
                     color = CinePrimary
                 )
             }
@@ -94,7 +107,7 @@ fun CineTopAppBar(
                 )
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             // Telegram Action Button
             IconButton(

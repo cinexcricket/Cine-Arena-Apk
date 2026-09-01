@@ -22,7 +22,9 @@ data class MatchItem(
     @Json(name = "channels") val channels: List<ChannelItem> = emptyList(),
     @Json(name = "category") val category: String? = null,
     @Json(name = "categories") val categories: String? = null,
-    @Json(name = "heading") val heading: String? = null
+    @Json(name = "heading") val heading: String? = null,
+    @Json(name = "subtitleUrl") val subtitleUrl: String? = null,
+    @Json(name = "subtitles") val subtitles: List<SubtitleTrackItem>? = null
 ) {
     val displayCategory: String
         get() = categories?.takeIf { it.isNotBlank() }
@@ -50,6 +52,12 @@ data class MatchItem(
 
     val firstCategory: String
         get() = parsedCategories.firstOrNull() ?: displayCategory.split(Regex("[,/|;]+")).firstOrNull()?.trim() ?: "Sports"
+
+    val isLive: Boolean
+        get() {
+            val s = status.trim().uppercase()
+            return s == "LIVE" || s == "FC LIVE" || s == "STREAMING" || s.contains("LIVE") || s.contains("STREAM")
+        }
 }
 
 fun splitCategoryString(raw: String?): List<String> {
@@ -78,6 +86,14 @@ data class ChannelsData(
 )
 
 @JsonClass(generateAdapter = true)
+data class SubtitleTrackItem(
+    @Json(name = "language") val language: String = "en",
+    @Json(name = "label") val label: String? = null,
+    @Json(name = "url") val url: String = "",
+    @Json(name = "mimeType") val mimeType: String? = null
+)
+
+@JsonClass(generateAdapter = true)
 data class ChannelItem(
     @Json(name = "id") val id: String,
     @Json(name = "name") val name: String = "",
@@ -92,7 +108,10 @@ data class ChannelItem(
     @Json(name = "drm") val drm: DrmConfig? = null,
     @Json(name = "cookie") val cookie: String? = null,
     @Json(name = "referer") val referer: String? = null,
-    @Json(name = "origin") val origin: String? = null
+    @Json(name = "origin") val origin: String? = null,
+    @Json(name = "subtitleUrl") val subtitleUrl: String? = null,
+    @Json(name = "subtitle") val subtitleTrack: String? = null,
+    @Json(name = "subtitles") val subtitles: List<SubtitleTrackItem>? = null
 ) {
     val parsedCategories: List<String>
         get() = splitCategoryString(category).ifEmpty { listOf("General") }

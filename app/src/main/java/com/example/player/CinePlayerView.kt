@@ -58,6 +58,7 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.Player
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Tracks
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
@@ -69,18 +70,28 @@ import androidx.media3.exoplayer.drm.DefaultDrmSessionManager
 import androidx.media3.exoplayer.drm.FrameworkMediaDrm
 import androidx.media3.exoplayer.drm.HttpMediaDrmCallback
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
+import androidx.media3.exoplayer.source.SingleSampleMediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import androidx.media3.ui.CaptionStyleCompat
+import androidx.media3.ui.SubtitleView
+import androidx.media3.common.text.Cue
+import androidx.media3.common.text.CueGroup
+import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.compose.ui.input.key.*
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import com.example.ui.components.dpadFocusable
 import com.example.model.DrmConfig
+import com.example.model.SubtitleTrackItem
 import kotlinx.coroutines.delay
 
 @OptIn(UnstableApi::class)
@@ -107,7 +118,8 @@ data class SubtitleTrackOption(
     val language: String,
     val group: Tracks.Group?,
     val trackIndex: Int,
-    val isOff: Boolean = false
+    val isOff: Boolean = false,
+    val isSelected: Boolean = false
 )
 
 enum class VideoResizeMode {
@@ -233,6 +245,8 @@ fun CinePlayerView(
     cookie: String? = null,
     referer: String? = null,
     origin: String? = null,
+    subtitleUrl: String? = null,
+    subtitles: List<SubtitleTrackItem>? = null,
     title: String = "",
     subtitle: String = "",
     initialPositionMs: Long = 0L,
@@ -270,6 +284,8 @@ fun CinePlayerView(
             cookie = cookie,
             referer = referer,
             origin = origin,
+            subtitleUrl = subtitleUrl,
+            subtitles = subtitles,
             title = title,
             subtitle = subtitle,
             initialPositionMs = initialPositionMs,
@@ -296,6 +312,8 @@ fun ExoStreamPlayer(
     cookie: String?,
     referer: String?,
     origin: String?,
+    subtitleUrl: String? = null,
+    subtitles: List<SubtitleTrackItem>? = null,
     title: String,
     subtitle: String,
     initialPositionMs: Long = 0L,
@@ -328,12 +346,31 @@ fun ExoStreamPlayer(
     var currentPosition by remember { mutableLongStateOf(0L) }
     var duration by remember { mutableLongStateOf(0L) }
     val playerFocusRequester = remember { FocusRequester() }
+    val playPauseFocusRequester = remember { FocusRequester() }
+    var controlsInteractionCount by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         try {
             playerFocusRequester.requestFocus()
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    LaunchedEffect(showControls) {
+        if (showControls) {
+            delay(50L)
+            try {
+                playPauseFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        } else {
+            try {
+                playerFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Ignore
+            }
         }
     }
 
@@ -386,10 +423,31 @@ fun ExoStreamPlayer(
         }
     }
 
-    // Auto hide controls after 2.5 seconds
-    LaunchedEffect(showControls, isPlaying) {
-        if (showControls && isPlaying) {
-            kotlinx.coroutines.delay(2500L)
+    var qualityOptions by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
+    var selectedQualityLabel by remember { mutableStateOf("Auto") }
+    var showQualityDialog by remember { mutableStateOf(false) }
+
+    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
+    var showSpeedDialog by remember { mutableStateOf(false) }
+
+    var audioTrackOptions by remember { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
+    var selectedAudioLabel by remember { mutableStateOf("Default / Auto") }
+    var showLanguageDialog by remember { mutableStateOf(false) }
+
+    var subtitleTrackOptions by remember { mutableStateOf<List<SubtitleTrackOption>>(emptyList()) }
+    var selectedSubtitleLabel by remember {
+        mutableStateOf(
+            if (!subtitleUrl.isNullOrBlank() || !subtitles.isNullOrEmpty()) "English Subtitles" else "Off"
+        )
+    }
+    var showCaptionDialog by remember { mutableStateOf(false) }
+    var currentCues by remember { mutableStateOf<List<Cue>>(emptyList()) }
+
+    // Auto hide controls after 5 seconds of inactivity on TV/mobile
+    LaunchedEffect(showControls, isPlaying, controlsInteractionCount, showQualityDialog, showSpeedDialog, showLanguageDialog, showCaptionDialog) {
+        val anyDialogOpen = showQualityDialog || showSpeedDialog || showLanguageDialog || showCaptionDialog
+        if (showControls && isPlaying && !anyDialogOpen) {
+            kotlinx.coroutines.delay(5000L)
             showControls = false
         }
     }
@@ -409,21 +467,6 @@ fun ExoStreamPlayer(
             showLockOverlay = false
         }
     }
-
-    var qualityOptions by remember { mutableStateOf<List<VideoQualityOption>>(emptyList()) }
-    var selectedQualityLabel by remember { mutableStateOf("Auto") }
-    var showQualityDialog by remember { mutableStateOf(false) }
-
-    var playbackSpeed by remember { mutableFloatStateOf(1.0f) }
-    var showSpeedDialog by remember { mutableStateOf(false) }
-
-    var audioTrackOptions by remember { mutableStateOf<List<AudioTrackOption>>(emptyList()) }
-    var selectedAudioLabel by remember { mutableStateOf("Default / Auto") }
-    var showLanguageDialog by remember { mutableStateOf(false) }
-
-    var subtitleTrackOptions by remember { mutableStateOf<List<SubtitleTrackOption>>(emptyList()) }
-    var selectedSubtitleLabel by remember { mutableStateOf("Off") }
-    var showCaptionDialog by remember { mutableStateOf(false) }
 
     val isDash = remember(streamUrl, streamType) {
         streamType.equals("dash", ignoreCase = true) ||
@@ -496,6 +539,38 @@ fun ExoStreamPlayer(
                 mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP4)
             }
 
+            val subConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
+            if (!subtitleUrl.isNullOrBlank() && (subtitleUrl.startsWith("http://") || subtitleUrl.startsWith("https://"))) {
+                val mime = if (subtitleUrl.endsWith(".srt", ignoreCase = true)) MimeTypes.APPLICATION_SUBRIP
+                           else if (subtitleUrl.endsWith(".ttml", ignoreCase = true)) MimeTypes.APPLICATION_TTML
+                           else MimeTypes.TEXT_VTT
+                subConfigs.add(
+                    MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(subtitleUrl.trim()))
+                        .setMimeType(mime)
+                        .setLanguage("en")
+                        .setLabel("English Subtitles")
+                        .setSelectionFlags(C.SELECTION_FLAG_DEFAULT)
+                        .build()
+                )
+            }
+            subtitles?.forEach { sub ->
+                if (sub.url.isNotBlank() && (sub.url.startsWith("http://") || sub.url.startsWith("https://"))) {
+                    val mime = sub.mimeType ?: if (sub.url.endsWith(".srt", ignoreCase = true)) MimeTypes.APPLICATION_SUBRIP
+                               else if (sub.url.endsWith(".ttml", ignoreCase = true)) MimeTypes.APPLICATION_TTML
+                               else MimeTypes.TEXT_VTT
+                    subConfigs.add(
+                        MediaItem.SubtitleConfiguration.Builder(android.net.Uri.parse(sub.url.trim()))
+                            .setMimeType(mime)
+                            .setLanguage(sub.language.ifBlank { "en" })
+                            .setLabel(sub.label ?: "Subtitle (${sub.language.uppercase()})")
+                            .build()
+                    )
+                }
+            }
+            if (subConfigs.isNotEmpty()) {
+                mediaItemBuilder.setSubtitleConfigurations(subConfigs)
+            }
+
             val localDrmCallback = ClearKeyUtil.buildClearKeyDrmCallback(activeDrm)
 
             if (localDrmCallback != null) {
@@ -543,7 +618,7 @@ fun ExoStreamPlayer(
                 .setConstantBitrateSeekingEnabled(true)
                 .setMp4ExtractorFlags(Mp4Extractor.FLAG_WORKAROUND_IGNORE_EDIT_LISTS)
 
-            val mediaSource = when {
+            val baseMediaSource = when {
                 isDashStream -> {
                     val dashFactory = DashMediaSource.Factory(dataSourceFactory)
                     if (drmSessionManager != null) {
@@ -565,6 +640,17 @@ fun ExoStreamPlayer(
                     }
                     progFactory.createMediaSource(mediaItem)
                 }
+            }
+
+            val subtitleSources = subConfigs.map { config ->
+                SingleSampleMediaSource.Factory(dataSourceFactory)
+                    .createMediaSource(config, C.TIME_UNSET)
+            }
+
+            val mediaSource = if (subtitleSources.isNotEmpty()) {
+                MergingMediaSource(baseMediaSource, *subtitleSources.toTypedArray())
+            } else {
+                baseMediaSource
             }
 
             val loadControl = DefaultLoadControl.Builder()
@@ -590,7 +676,15 @@ fun ExoStreamPlayer(
                 .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                 .build()
 
+            val trackSelector = DefaultTrackSelector(context).apply {
+                parameters = buildUponParameters()
+                    .setAllowMultipleAdaptiveSelections(true)
+                    .setIgnoredTextSelectionFlags(0)
+                    .build()
+            }
+
             ExoPlayer.Builder(context)
+                .setTrackSelector(trackSelector)
                 .setRenderersFactory(renderersFactory)
                 .setLoadControl(loadControl)
                 .setAudioAttributes(audioAttrs, true)
@@ -622,18 +716,12 @@ fun ExoStreamPlayer(
         }
     }
 
-    // Lifecycle observer ensures video and audio pause/release immediately when app or PiP is closed/stopped
+    // Lifecycle observer ensures video and audio release properly when app is destroyed, but keeps playing in background / lock screen
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, exoPlayer) {
         val player = exoPlayer ?: return@DisposableEffect onDispose {}
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            val inPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
             when (event) {
-                androidx.lifecycle.Lifecycle.Event.ON_STOP -> {
-                    if (!inPip && activity?.isChangingConfigurations != true) {
-                        player.pause()
-                    }
-                }
                 androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
                     if (player.playWhenReady && !player.isPlaying && player.playbackState == Player.STATE_READY) {
                         player.play()
@@ -744,13 +832,15 @@ fun ExoStreamPlayer(
                             val format = mediaTrackGroup.getFormat(i)
                             val lang = format.language?.takeIf { it.isNotBlank() && it != "und" }?.uppercase() ?: "SUBTITLE ${sOptions.size}"
                             val label = if (format.label.isNullOrBlank()) "Subtitle ($lang)" else "${format.label} ($lang)"
+                            val isSelected = group.isTrackSelected(i)
                             sOptions.add(
                                 SubtitleTrackOption(
                                     label = label,
                                     language = lang,
                                     group = group,
                                     trackIndex = i,
-                                    isOff = false
+                                    isOff = false,
+                                    isSelected = isSelected
                                 )
                             )
                         }
@@ -758,7 +848,21 @@ fun ExoStreamPlayer(
                 }
                 qualityOptions = options.distinctBy { it.label }.sortedByDescending { it.height }
                 audioTrackOptions = aOptions.distinctBy { it.label }
-                subtitleTrackOptions = sOptions.distinctBy { it.label }
+                val distinctSubs = sOptions.distinctBy { it.label }
+                subtitleTrackOptions = distinctSubs
+                val activeSelected = distinctSubs.firstOrNull { it.isSelected && !it.isOff }
+                if (activeSelected != null && selectedSubtitleLabel == "Off") {
+                    selectedSubtitleLabel = activeSelected.label
+                }
+            }
+
+            override fun onCues(cueGroup: CueGroup) {
+                currentCues = cueGroup.cues
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onCues(cues: List<Cue>) {
+                currentCues = cues
             }
         }
         player.addListener(listener)
@@ -991,23 +1095,10 @@ fun ExoStreamPlayer(
                 .onKeyEvent { keyEvent ->
                     if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
                     val player = exoPlayer
-                    when (keyEvent.nativeKeyEvent.keyCode) {
-                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
-                        android.view.KeyEvent.KEYCODE_ENTER,
-                        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                            if (showControls) {
-                                if (isPlaying) {
-                                    player?.pause()
-                                    isPlaying = false
-                                } else {
-                                    player?.play()
-                                    isPlaying = true
-                                }
-                            } else {
-                                showControls = true
-                            }
-                            true
-                        }
+                    val keyCode = keyEvent.nativeKeyEvent.keyCode
+
+                    // Hardware Media Buttons (Always operate playback directly)
+                    when (keyCode) {
                         android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                             if (isPlaying) {
                                 player?.pause()
@@ -1016,19 +1107,18 @@ fun ExoStreamPlayer(
                                 player?.play()
                                 isPlaying = true
                             }
-                            true
+                            return@onKeyEvent true
                         }
                         android.view.KeyEvent.KEYCODE_MEDIA_PLAY -> {
                             player?.play()
                             isPlaying = true
-                            true
+                            return@onKeyEvent true
                         }
                         android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> {
                             player?.pause()
                             isPlaying = false
-                            true
+                            return@onKeyEvent true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
                         android.view.KeyEvent.KEYCODE_MEDIA_REWIND,
                         android.view.KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
                             if (player != null) {
@@ -1036,10 +1126,10 @@ fun ExoStreamPlayer(
                                 player.seekTo(target)
                                 currentPosition = target
                                 showControls = true
+                                controlsInteractionCount++
                             }
-                            true
+                            return@onKeyEvent true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
                         android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
                         android.view.KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
                             if (player != null) {
@@ -1053,25 +1143,72 @@ fun ExoStreamPlayer(
                                 player.seekTo(target)
                                 currentPosition = target
                                 showControls = true
+                                controlsInteractionCount++
                             }
-                            true
+                            return@onKeyEvent true
                         }
-                        android.view.KeyEvent.KEYCODE_DPAD_UP,
-                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
-                        android.view.KeyEvent.KEYCODE_MENU -> {
-                            showControls = !showControls
-                            true
-                        }
-                        android.view.KeyEvent.KEYCODE_BACK -> {
-                            if (showControls) {
-                                showControls = false
-                                true
-                            } else {
-                                false
-                            }
-                        }
-                        else -> false
                     }
+
+                    // When controls are HIDDEN: Any D-pad key shows controls and transfers focus to controls
+                    if (!showControls) {
+                        when (keyCode) {
+                            android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                            android.view.KeyEvent.KEYCODE_ENTER,
+                            android.view.KeyEvent.KEYCODE_NUMPAD_ENTER,
+                            android.view.KeyEvent.KEYCODE_DPAD_UP,
+                            android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                            android.view.KeyEvent.KEYCODE_MENU -> {
+                                showControls = true
+                                controlsInteractionCount++
+                                return@onKeyEvent true
+                            }
+                            android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                if (player != null) {
+                                    val target = (player.currentPosition - 10000L).coerceAtLeast(0L)
+                                    player.seekTo(target)
+                                    currentPosition = target
+                                    showControls = true
+                                    controlsInteractionCount++
+                                }
+                                return@onKeyEvent true
+                            }
+                            android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                if (player != null) {
+                                    val rawDur = player.duration
+                                    val validDur = if (rawDur != C.TIME_UNSET && rawDur > 0) rawDur else duration
+                                    val target = if (validDur > 0) {
+                                        (player.currentPosition + 10000L).coerceAtMost(validDur)
+                                    } else {
+                                        player.currentPosition + 10000L
+                                    }
+                                    player.seekTo(target)
+                                    currentPosition = target
+                                    showControls = true
+                                    controlsInteractionCount++
+                                }
+                                return@onKeyEvent true
+                            }
+                        }
+                        return@onKeyEvent false
+                    }
+
+                    // When controls ARE VISIBLE:
+                    // Allow Compose focus system to navigate DPAD_UP / DPAD_DOWN / DPAD_LEFT / DPAD_RIGHT
+                    // across all control buttons!
+                    if (keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                        showControls = false
+                        try {
+                            playerFocusRequester.requestFocus()
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                        }
+                        return@onKeyEvent true
+                    } else if (keyCode == android.view.KeyEvent.KEYCODE_MENU) {
+                        showControls = false
+                        return@onKeyEvent true
+                    }
+
+                    false
                 }
                 .pointerInput(isScreenLocked, isFullscreen) {
                     if (isScreenLocked) return@pointerInput
@@ -1136,38 +1273,6 @@ fun ExoStreamPlayer(
                             } else {
                                 showControls = !showControls
                             }
-                        },
-                        onDoubleTap = { offset ->
-                            if (isScreenLocked) {
-                                showLockOverlay = true
-                                return@detectTapGestures
-                            }
-                            val w = size.width
-                            val x = offset.x
-                            val player = exoPlayer
-                            if (player != null) {
-                                if (x < w * 0.35f) {
-                                    val target = (player.currentPosition - 10000).coerceAtLeast(0L)
-                                    player.seekTo(target)
-                                    currentPosition = target
-                                    showControls = true
-                                } else if (x > w * 0.65f) {
-                                    val rawDur = player.duration
-                                    val validDur = if (rawDur != C.TIME_UNSET && rawDur > 0) rawDur else 0L
-                                    val target = if (validDur > 0) {
-                                        (player.currentPosition + 10000).coerceAtMost(validDur)
-                                    } else {
-                                        player.currentPosition + 10000
-                                    }
-                                    player.seekTo(target)
-                                    currentPosition = target
-                                    showControls = true
-                                } else {
-                                    showControls = !showControls
-                                }
-                            } else {
-                                showControls = !showControls
-                            }
                         }
                     )
                 }
@@ -1189,8 +1294,21 @@ fun ExoStreamPlayer(
                         applyExoPlayerAspectRatio(this, exoPlayer, resizeMode, currentVideoSize)
 
                         subtitleView?.let { subView ->
-                            subView.setUserDefaultStyle()
-                            subView.setUserDefaultTextSize()
+                            subView.visibility = View.VISIBLE
+                            subView.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * 1.25f)
+                            subView.setBottomPaddingFraction(0.08f)
+                            subView.setStyle(
+                                CaptionStyleCompat(
+                                    android.graphics.Color.WHITE,
+                                    android.graphics.Color.argb(190, 0, 0, 0),
+                                    android.graphics.Color.TRANSPARENT,
+                                    CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                                    android.graphics.Color.BLACK,
+                                    android.graphics.Typeface.DEFAULT_BOLD
+                                )
+                            )
+                            subView.setApplyEmbeddedStyles(true)
+                            subView.setApplyEmbeddedFontSizes(true)
                         }
                         playerViewRef = this
                     }
@@ -1203,8 +1321,21 @@ fun ExoStreamPlayer(
                     applyExoPlayerAspectRatio(playerView, exoPlayer, resizeMode, currentVideoSize)
 
                     playerView.subtitleView?.let { subView ->
-                        subView.setUserDefaultStyle()
-                        subView.setUserDefaultTextSize()
+                        subView.visibility = View.VISIBLE
+                        subView.setFractionalTextSize(SubtitleView.DEFAULT_TEXT_SIZE_FRACTION * 1.25f)
+                        subView.setBottomPaddingFraction(0.08f)
+                        subView.setStyle(
+                            CaptionStyleCompat(
+                                android.graphics.Color.WHITE,
+                                android.graphics.Color.argb(190, 0, 0, 0),
+                                android.graphics.Color.TRANSPARENT,
+                                CaptionStyleCompat.EDGE_TYPE_OUTLINE,
+                                android.graphics.Color.BLACK,
+                                android.graphics.Typeface.DEFAULT_BOLD
+                            )
+                        )
+                        subView.setApplyEmbeddedStyles(true)
+                        subView.setApplyEmbeddedFontSizes(true)
                     }
                 },
                 onRelease = { playerView ->
@@ -1216,6 +1347,46 @@ fun ExoStreamPlayer(
                 },
                 modifier = Modifier.fillMaxSize()
             )
+
+            // Compose Subtitle Cues Overlay (Displays crisp high-visibility subtitles directly)
+            if (selectedSubtitleLabel != "Off" && currentCues.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.BottomCenter)
+                        .padding(
+                            bottom = if (isFullscreen) 52.dp else 28.dp,
+                            start = 24.dp,
+                            end = 24.dp
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        currentCues.forEach { cue ->
+                            val cueText = cue.text?.toString()
+                            if (!cueText.isNullOrBlank()) {
+                                Surface(
+                                    color = Color.Black.copy(alpha = 0.85f),
+                                    shape = RoundedCornerShape(6.dp),
+                                    border = BorderStroke(1.dp, Color.Black.copy(alpha = 0.5f))
+                                ) {
+                                    Text(
+                                        text = cueText,
+                                        color = Color.White,
+                                        fontSize = if (isFullscreen) 18.sp else 14.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Loading spinner
             if (isBuffering) {
@@ -1479,6 +1650,7 @@ fun ExoStreamPlayer(
                         ) {
                             IconButton(
                                 onClick = {
+                                    controlsInteractionCount++
                                     val player = exoPlayer
                                     if (player != null) {
                                         val target = (player.currentPosition - 10000L).coerceAtLeast(0L)
@@ -1503,6 +1675,7 @@ fun ExoStreamPlayer(
 
                             IconButton(
                                 onClick = {
+                                    controlsInteractionCount++
                                     if (isPlaying) {
                                         exoPlayer?.pause()
                                         isPlaying = false
@@ -1514,6 +1687,7 @@ fun ExoStreamPlayer(
                                 modifier = Modifier
                                     .size(60.dp)
                                     .background(Color(0xFF2B62F6), CircleShape)
+                                    .focusRequester(playPauseFocusRequester)
                                     .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White, scaleOnFocus = 1.15f)
                             ) {
                                 if (isBuffering) {
@@ -1539,6 +1713,7 @@ fun ExoStreamPlayer(
 
                             IconButton(
                                 onClick = {
+                                    controlsInteractionCount++
                                     val player = exoPlayer
                                     if (player != null) {
                                         val rawDur = player.duration
@@ -1577,6 +1752,7 @@ fun ExoStreamPlayer(
                                     positionMs = currentPosition,
                                     durationMs = duration,
                                     onSeek = { seekMs ->
+                                        controlsInteractionCount++
                                         val player = exoPlayer
                                         if (player != null) {
                                             val target = seekMs.coerceIn(0L, duration)
@@ -1598,10 +1774,13 @@ fun ExoStreamPlayer(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(
                                         onClick = {
+                                            controlsInteractionCount++
                                             isMuted = !isMuted
                                             exoPlayer?.volume = if (isMuted) 0f else 1f
                                         },
-                                        modifier = Modifier.size(32.dp)
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF), scaleOnFocus = 1.15f)
                                     ) {
                                         Icon(
                                             imageVector = if (isMuted) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
@@ -1945,6 +2124,11 @@ fun ExoStreamPlayer(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .dpadFocusable(
+                                        shape = RoundedCornerShape(8.dp),
+                                        focusedBorderColor = Color(0xFF00E5FF),
+                                        scaleOnFocus = 1.03f
+                                    )
                                     .clickable {
                                         selectedQualityLabel = if (option.isAuto) "Auto" else "${option.height}p"
                                         showQualityDialog = false
@@ -1989,7 +2173,10 @@ fun ExoStreamPlayer(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showQualityDialog = false }) {
+                TextButton(
+                    onClick = { showQualityDialog = false },
+                    modifier = Modifier.dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF2B62F6))
+                ) {
                     Text("Close", color = Color(0xFF2B62F6))
                 }
             },
@@ -2027,6 +2214,11 @@ fun ExoStreamPlayer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .dpadFocusable(
+                                    shape = RoundedCornerShape(8.dp),
+                                    focusedBorderColor = Color(0xFF00E5FF),
+                                    scaleOnFocus = 1.03f
+                                )
                                 .clickable {
                                     playbackSpeed = speed
                                     exoPlayer?.setPlaybackSpeed(speed)
@@ -2057,7 +2249,10 @@ fun ExoStreamPlayer(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showSpeedDialog = false }) {
+                TextButton(
+                    onClick = { showSpeedDialog = false },
+                    modifier = Modifier.dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF2B62F6))
+                ) {
                     Text("Close", color = Color(0xFF2B62F6))
                 }
             },
@@ -2104,6 +2299,11 @@ fun ExoStreamPlayer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .dpadFocusable(
+                                    shape = RoundedCornerShape(8.dp),
+                                    focusedBorderColor = Color(0xFF00E5FF),
+                                    scaleOnFocus = 1.03f
+                                )
                                 .clickable {
                                     selectedAudioLabel = option.label
                                     showLanguageDialog = false
@@ -2147,7 +2347,10 @@ fun ExoStreamPlayer(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showLanguageDialog = false }) {
+                TextButton(
+                    onClick = { showLanguageDialog = false },
+                    modifier = Modifier.dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF2B62F6))
+                ) {
                     Text("Close", color = Color(0xFF2B62F6))
                 }
             },
@@ -2194,6 +2397,11 @@ fun ExoStreamPlayer(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .dpadFocusable(
+                                    shape = RoundedCornerShape(8.dp),
+                                    focusedBorderColor = Color(0xFF00E5FF),
+                                    scaleOnFocus = 1.03f
+                                )
                                 .clickable {
                                     selectedSubtitleLabel = option.label
                                     showCaptionDialog = false
@@ -2203,20 +2411,23 @@ fun ExoStreamPlayer(
                                         val builder = player.trackSelectionParameters.buildUpon()
                                         if (option.isOff) {
                                             builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                            builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
                                             selectedSubtitleLabel = "Off"
+                                            currentCues = emptyList()
                                         } else {
                                             builder.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                                            builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
                                             if (option.group != null) {
-                                                val override = TrackSelectionOverride(option.group.mediaTrackGroup, option.trackIndex)
+                                                val override = TrackSelectionOverride(option.group.mediaTrackGroup, listOf(option.trackIndex))
                                                 builder.setOverrideForType(override)
                                                 selectedSubtitleLabel = option.label
                                             } else if (option.language == "auto") {
-                                                builder.clearOverridesOfType(C.TRACK_TYPE_TEXT)
                                                 selectedSubtitleLabel = "Auto"
                                             } else {
-                                                builder.setPreferredTextLanguage(option.language)
+                                                builder.setPreferredTextLanguage(option.language.lowercase())
                                                 selectedSubtitleLabel = option.label
                                             }
+                                            builder.setIgnoredTextSelectionFlags(0)
                                         }
                                         player.trackSelectionParameters = builder.build()
                                     }
@@ -2244,7 +2455,10 @@ fun ExoStreamPlayer(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showCaptionDialog = false }) {
+                TextButton(
+                    onClick = { showCaptionDialog = false },
+                    modifier = Modifier.dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF2B62F6))
+                ) {
                     Text("Close", color = Color(0xFF2B62F6))
                 }
             },
@@ -2280,6 +2494,34 @@ fun IframeStreamPlayer(
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var isScreenLocked by remember { mutableStateOf(false) }
     var showLockOverlay by remember { mutableStateOf(false) }
+    val iframeFocusRequester = remember { FocusRequester() }
+    val backFocusRequester = remember { FocusRequester() }
+    var controlsInteractionCount by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        try {
+            iframeFocusRequester.requestFocus()
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    LaunchedEffect(showIframeControls) {
+        if (showIframeControls) {
+            delay(50L)
+            try {
+                backFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        } else {
+            try {
+                iframeFocusRequester.requestFocus()
+            } catch (e: Exception) {
+                // Ignore
+            }
+        }
+    }
 
     LaunchedEffect(resizeMode, isFullscreen) {
         val js = getIframeScalingJs(resizeMode)
@@ -2293,7 +2535,7 @@ fun IframeStreamPlayer(
         }
     }
 
-    LaunchedEffect(showIframeControls, isPip) {
+    LaunchedEffect(showIframeControls, isPip, controlsInteractionCount) {
         if (isPip && showIframeControls) {
             delay(3000)
             showIframeControls = false
@@ -2654,6 +2896,44 @@ fun IframeStreamPlayer(
                     .aspectRatio(16f / 9f)
                     .background(Color.Black)
             })
+            .focusRequester(iframeFocusRequester)
+            .focusable()
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                val keyCode = keyEvent.nativeKeyEvent.keyCode
+                if (!showIframeControls) {
+                    when (keyCode) {
+                        android.view.KeyEvent.KEYCODE_DPAD_CENTER,
+                        android.view.KeyEvent.KEYCODE_ENTER,
+                        android.view.KeyEvent.KEYCODE_NUMPAD_ENTER,
+                        android.view.KeyEvent.KEYCODE_DPAD_UP,
+                        android.view.KeyEvent.KEYCODE_DPAD_DOWN,
+                        android.view.KeyEvent.KEYCODE_DPAD_LEFT,
+                        android.view.KeyEvent.KEYCODE_DPAD_RIGHT,
+                        android.view.KeyEvent.KEYCODE_MENU -> {
+                            showIframeControls = true
+                            controlsInteractionCount++
+                            return@onKeyEvent true
+                        }
+                    }
+                    return@onKeyEvent false
+                }
+
+                if (keyCode == android.view.KeyEvent.KEYCODE_BACK) {
+                    showIframeControls = false
+                    try {
+                        iframeFocusRequester.requestFocus()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                    return@onKeyEvent true
+                } else if (keyCode == android.view.KeyEvent.KEYCODE_MENU) {
+                    showIframeControls = false
+                    return@onKeyEvent true
+                }
+
+                false
+            }
             .pointerInput(isScreenLocked, isFullscreen) {
                 if (isScreenLocked) return@pointerInput
                 detectVerticalDragGestures(
@@ -2909,6 +3189,8 @@ fun IframeStreamPlayer(
                             onClick = onBackClick,
                             modifier = Modifier
                                 .size(36.dp)
+                                .focusRequester(backFocusRequester)
+                                .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF))
                                 .background(Color.White.copy(alpha = 0.2f), CircleShape)
                         ) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
@@ -2938,7 +3220,9 @@ fun IframeStreamPlayer(
                         Surface(
                             color = Color.White.copy(alpha = 0.2f),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.clickable { showSpeedDialog = true }
+                            modifier = Modifier
+                                .dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF00E5FF))
+                                .clickable { showSpeedDialog = true }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -2990,7 +3274,9 @@ fun IframeStreamPlayer(
                                     }
                                 }
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier
+                                .size(32.dp)
+                                .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF))
                         ) {
                             Icon(
                                 imageVector = aspectIcon,
@@ -3009,7 +3295,9 @@ fun IframeStreamPlayer(
                                     showLockOverlay = true
                                     aspectToastText = "Screen Locked"
                                 },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF))
                             ) {
                                 Icon(
                                     imageVector = Icons.Default.Lock,
@@ -3024,7 +3312,9 @@ fun IframeStreamPlayer(
 
                         IconButton(
                             onClick = { onFullscreenToggle(!isFullscreen) },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier
+                                .size(32.dp)
+                                .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF))
                         ) {
                             Icon(
                                 painter = painterResource(
@@ -3041,7 +3331,9 @@ fun IframeStreamPlayer(
 
                         IconButton(
                             onClick = { onEnterPipClick() },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier
+                                .size(32.dp)
+                                .dpadFocusable(shape = CircleShape, focusedBorderColor = Color(0xFF00E5FF))
                         ) {
                             Icon(Icons.Default.PictureInPictureAlt, contentDescription = "PiP", tint = Color.White)
                         }
@@ -3075,6 +3367,7 @@ fun IframeStreamPlayer(
                             modifier = Modifier
                                 .align(Alignment.CenterStart)
                                 .padding(start = 8.dp)
+                                .dpadFocusable(shape = RoundedCornerShape(24.dp), focusedBorderColor = Color(0xFF00E5FF))
                                 .clickable {
                                     isScreenLocked = false
                                     showLockOverlay = false
@@ -3159,6 +3452,11 @@ fun IframeStreamPlayer(
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
+                                            .dpadFocusable(
+                                                shape = RoundedCornerShape(8.dp),
+                                                focusedBorderColor = Color(0xFF00E5FF),
+                                                scaleOnFocus = 1.03f
+                                            )
                                             .clickable {
                                                 playbackSpeed = speed
                                                 webViewRef?.evaluateJavascript(
@@ -3192,7 +3490,10 @@ fun IframeStreamPlayer(
                             }
                         },
                         confirmButton = {
-                            TextButton(onClick = { showSpeedDialog = false }) {
+                            TextButton(
+                                onClick = { showSpeedDialog = false },
+                                modifier = Modifier.dpadFocusable(shape = RoundedCornerShape(8.dp), focusedBorderColor = Color(0xFF2B62F6))
+                            ) {
                                 Text("Close", color = Color(0xFF2B62F6))
                             }
                         },
@@ -3229,13 +3530,37 @@ fun ThinVideoSeekbar(
 
     var isDragging by remember { mutableStateOf(false) }
     var dragFraction by remember { mutableFloatStateOf(0f) }
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
 
     val currentFraction = if (isDragging) dragFraction else (positionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
 
     BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(20.dp)
+            .height(28.dp)
+            .dpadFocusable(
+                shape = RoundedCornerShape(14.dp),
+                focusedBorderColor = Color(0xFF00E5FF),
+                scaleOnFocus = 1.02f,
+                interactionSource = interactionSource
+            )
+            .onKeyEvent { keyEvent ->
+                if (keyEvent.type != KeyEventType.KeyDown) return@onKeyEvent false
+                when (keyEvent.nativeKeyEvent.keyCode) {
+                    android.view.KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        val target = (positionMs - 10000L).coerceAtLeast(0L)
+                        onSeek(target)
+                        true
+                    }
+                    android.view.KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        val target = (positionMs + 10000L).coerceAtMost(durationMs)
+                        onSeek(target)
+                        true
+                    }
+                    else -> false
+                }
+            }
             .pointerInput(durationMs) {
                 detectTapGestures { offset ->
                     val frac = (offset.x / size.width).coerceIn(0f, 1f)
@@ -3262,31 +3587,37 @@ fun ThinVideoSeekbar(
     ) {
         val widthPx = constraints.maxWidth.toFloat()
         val thumbPx = currentFraction * widthPx
+        val trackHeight = if (isFocused) 6.dp else 3.dp
 
-        // Background track (Thin 3dp height)
+        // Background track
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(Color.White.copy(alpha = 0.35f))
+                .height(trackHeight)
+                .clip(RoundedCornerShape(trackHeight / 2))
+                .background(Color.White.copy(alpha = if (isFocused) 0.5f else 0.35f))
         )
-        // Active progress track (Thin 3dp height)
+        // Active progress track
         Box(
             modifier = Modifier
                 .fillMaxWidth(currentFraction)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(Color(0xFF2B62F6))
+                .height(trackHeight)
+                .clip(RoundedCornerShape(trackHeight / 2))
+                .background(if (isFocused) Color(0xFF00E5FF) else Color(0xFF2B62F6))
         )
-        // Small thumb handle (10dp dot)
+        // Thumb handle
         val density = LocalDensity.current
         val thumbOffsetDp = with(density) { thumbPx.toDp() }
+        val thumbSize = if (isFocused) 16.dp else 10.dp
         Box(
             modifier = Modifier
-                .offset(x = (thumbOffsetDp - 5.dp).coerceAtLeast(0.dp))
-                .size(10.dp)
-                .background(Color(0xFF2B62F6), CircleShape)
+                .offset(x = (thumbOffsetDp - (thumbSize / 2)).coerceAtLeast(0.dp))
+                .size(thumbSize)
+                .background(if (isFocused) Color(0xFF00E5FF) else Color(0xFF2B62F6), CircleShape)
+                .then(
+                    if (isFocused) Modifier.border(2.dp, Color.White, CircleShape)
+                    else Modifier
+                )
         )
     }
 }

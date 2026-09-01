@@ -96,8 +96,25 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val isRefreshingTv = MutableStateFlow(false)
     val isRefreshingMovies = MutableStateFlow(false)
 
+    // Unique installation device identifier to count exact active devices
+    val deviceId: String by lazy {
+        val prefs = getApplication<Application>().getSharedPreferences("cine_device_prefs", android.content.Context.MODE_PRIVATE)
+        var id = prefs.getString("unique_device_uuid", null)
+        if (id.isNullOrBlank()) {
+            id = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("unique_device_uuid", id).apply()
+        }
+        id
+    }
+
     // Reaction Likes Counter
-    val liveMatchLikes = MutableStateFlow(1240)
+    val liveMatchLikes = MutableStateFlow(12)
+
+    // Exact Active Stream Viewers in Video Section (starts with 1 representing this active device)
+    private val _activeStreamViewers = MutableStateFlow(1)
+    val activeStreamViewers: StateFlow<Int> = _activeStreamViewers.asStateFlow()
+
+    private var presenceHeartbeatJob: kotlinx.coroutines.Job? = null
 
     // Chat messages (Pure database chat loaded from local Room DB)
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
@@ -107,6 +124,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadData()
         observeDbChatMessages()
         startHostingerChatSync()
+    }
+
+    fun startPresenceSyncForActiveStream() {
+        presenceHeartbeatJob?.cancel()
+        _activeStreamViewers.value = 1
+        presenceHeartbeatJob = viewModelScope.launch {
+            while (isActive) {
+                try {
+                    val currentMatchId = activeMatch.value?.id ?: activeChannel.value?.id ?: "global_live"
+                    val apiUrl = userProfile.value?.hostingerApiUrl?.ifBlank { "https://cinexcricket.com/api/chat.php" } ?: "https://cinexcricket.com/api/chat.php"
+                    
+                    val realActiveCount = repository.sendPresenceHeartbeat(
+                        apiUrl = apiUrl,
+                        matchId = currentMatchId,
+                        deviceId = deviceId
+                    )
+
+                    if (realActiveCount != null && realActiveCount >= 1) {
+                        _activeStreamViewers.value = realActiveCount
+                    }
+                } catch (_: Exception) {}
+                
+                // Real-time heartbeat interval every 6 seconds
+                kotlinx.coroutines.delay(6000L)
+            }
+        }
+    }
+
+    fun stopPresenceSyncForActiveStream() {
+        val currentMatchId = activeMatch.value?.id ?: activeChannel.value?.id ?: "global_live"
+        val apiUrl = userProfile.value?.hostingerApiUrl?.ifBlank { "https://cinexcricket.com/api/chat.php" } ?: "https://cinexcricket.com/api/chat.php"
+        presenceHeartbeatJob?.cancel()
+        presenceHeartbeatJob = null
+        _activeStreamViewers.value = 1
+        viewModelScope.launch {
+            try {
+                repository.sendPresenceLeave(
+                    apiUrl = apiUrl,
+                    matchId = currentMatchId,
+                    deviceId = deviceId
+                )
+            } catch (_: Exception) {}
+        }
     }
 
     private fun observeDbChatMessages() {
@@ -440,12 +500,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         activePlaybackInitialPosition.value = initialPositionMs
         activeMatch.value = filledMatch
         activeChannel.value = channel ?: filledMatch.channels.firstOrNull()
+        startPresenceSyncForActiveStream()
     }
 
     fun playChannel(channel: ChannelItem, initialPositionMs: Long = 0L) {
         activePlaybackInitialPosition.value = initialPositionMs
         activeMatch.value = null
         activeChannel.value = channel
+        startPresenceSyncForActiveStream()
     }
 
     fun playContinueWatchingItem(item: com.example.data.ContinueWatchingEntity) {
@@ -471,6 +533,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         activeMatch.value = match
         activeChannel.value = channel
+        startPresenceSyncForActiveStream()
     }
 
     fun removeContinueWatchingItem(id: String) {
@@ -529,6 +592,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun closePlayer() {
+        stopPresenceSyncForActiveStream()
         activeMatch.value = null
         activeChannel.value = null
         activePlaybackInitialPosition.value = 0L

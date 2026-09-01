@@ -244,4 +244,65 @@ class CineRepository(
             false
         }
     }
+
+    suspend fun sendPresenceHeartbeat(
+        apiUrl: String,
+        matchId: String = "global_live",
+        deviceId: String
+    ): Int? = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        if (apiUrl.isBlank() || !apiUrl.startsWith("http")) return@withContext null
+        try {
+            val presenceUrl = when {
+                apiUrl.contains("chat.php") -> apiUrl.replace("chat.php", "presence.php")
+                apiUrl.endsWith("/") -> "${apiUrl}presence.php"
+                else -> apiUrl
+            }
+            val separator = if (presenceUrl.contains("?")) "&" else "?"
+            val fullUrl = "${presenceUrl}${separator}action=heartbeat&match_id=$matchId&device_id=$deviceId&t=${System.currentTimeMillis()}"
+
+            val request = okhttp3.Request.Builder()
+                .url(fullUrl)
+                .get()
+                .build()
+
+            val response = RetrofitClient.getOkHttpClient().newCall(request).execute()
+            val responseBody = response.body?.string() ?: return@withContext null
+            
+            val jsonObj = org.json.JSONObject(responseBody)
+            val count = when {
+                jsonObj.has("count") -> jsonObj.optInt("count", 1)
+                jsonObj.has("active_devices") -> jsonObj.optInt("active_devices", 1)
+                jsonObj.has("viewers") -> jsonObj.optInt("viewers", 1)
+                jsonObj.has("devices") -> jsonObj.optJSONArray("devices")?.length() ?: 1
+                else -> 1
+            }
+            count.coerceAtLeast(1)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun sendPresenceLeave(
+        apiUrl: String,
+        matchId: String = "global_live",
+        deviceId: String
+    ) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        if (apiUrl.isBlank() || !apiUrl.startsWith("http")) return@withContext
+        try {
+            val presenceUrl = when {
+                apiUrl.contains("chat.php") -> apiUrl.replace("chat.php", "presence.php")
+                apiUrl.endsWith("/") -> "${apiUrl}presence.php"
+                else -> apiUrl
+            }
+            val separator = if (presenceUrl.contains("?")) "&" else "?"
+            val fullUrl = "${presenceUrl}${separator}action=leave&match_id=$matchId&device_id=$deviceId"
+
+            val request = okhttp3.Request.Builder()
+                .url(fullUrl)
+                .get()
+                .build()
+
+            RetrofitClient.getOkHttpClient().newCall(request).execute()
+        } catch (_: Exception) {}
+    }
 }

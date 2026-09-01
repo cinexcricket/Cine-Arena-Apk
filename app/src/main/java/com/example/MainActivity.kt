@@ -57,7 +57,15 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        // Check if running on Android TV device
+        val uiModeManager = getSystemService(android.content.Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+        val isTv = uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION ||
+                packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK) ||
+                packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TELEVISION)
+
+        if (!isTv) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
 
         // Initialize Android notification channel for broadcast alerts from cinexcricket.com
         com.example.notification.HostingerNotificationManager.createNotificationChannel(this)
@@ -237,6 +245,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
 
+    val isTvDevice = remember(context) {
+        val uiModeManager = context.getSystemService(android.content.Context.UI_MODE_SERVICE) as? android.app.UiModeManager
+        val isTelevision = uiModeManager?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+        val hasLeanback = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_LEANBACK)
+        val hasTvFeature = context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_TELEVISION)
+        isTelevision || hasLeanback || hasTvFeature
+    }
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
@@ -255,10 +271,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val chatMessages by viewModel.chatMessages.collectAsState()
     val userProfile by viewModel.userProfile.collectAsState()
     val liveLikesCount by viewModel.liveMatchLikes.collectAsState()
+    val activeStreamViewers by viewModel.activeStreamViewers.collectAsState()
     val showProfileDialog by viewModel.showProfileDialog.collectAsState()
 
     // Orientation Event Listener to unlock rotation ONLY when phone auto-rotation is ON
-    DisposableEffect(context, activeChannel) {
+    DisposableEffect(context, activeChannel, isTvDevice) {
+        if (isTvDevice) {
+            return@DisposableEffect onDispose {}
+        }
         val orientationEventListener = object : android.view.OrientationEventListener(context, android.hardware.SensorManager.SENSOR_DELAY_NORMAL) {
             override fun onOrientationChanged(orientation: Int) {
                 if (orientation == ORIENTATION_UNKNOWN || activity == null) return
@@ -322,7 +342,9 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val activePlaybackInitialPosition by viewModel.activePlaybackInitialPosition.collectAsState()
 
     val closePlayerAndReturn = {
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        if (!isTvDevice) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
         isPlayerFullscreen = false
         isPlayerExpanded = false
         viewModel.closePlayer()
@@ -332,21 +354,24 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         }
     }
 
+    val isEffectivelyFullscreen = (isPlayerFullscreen || isLandscape || isTvDevice) && (activeChannel != null && isPlayerExpanded)
+
     BackHandler(enabled = true) {
         when {
             showSplashScreen -> { /* Wait or let splash finish */ }
             drawerState.isOpen -> {
                 scope.launch { drawerState.close() }
             }
-            isPlayerFullscreen -> {
-                isPlayerFullscreen = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            isEffectivelyFullscreen -> {
+                closePlayerAndReturn()
             }
             activeChannel != null && isPlayerExpanded -> {
                 // Minimize to in-app floating mini-player so user can browse app
                 isPlayerExpanded = false
                 isPlayerFullscreen = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                if (!isTvDevice) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
             }
             activeChannel != null && !isPlayerExpanded -> {
                 // Close player completely if back is pressed while already in mini player
@@ -396,10 +421,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
             isPlayerExpanded = true
             if (wasFullscreenBeforePip) {
                 isPlayerFullscreen = true
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                if (!isTvDevice) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                }
             } else {
                 isPlayerFullscreen = false
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                if (!isTvDevice) {
+                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                }
                 if (lastSourceTab != null) {
                     selectedTab = lastSourceTab!!
                 }
@@ -407,7 +436,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         }
     }
 
-    val playerContent = remember(activeChannel, activeMatch, activePlaybackInitialPosition) {
+    val playerContent = remember(activeChannel, activeMatch, activePlaybackInitialPosition, isTvDevice) {
         if (activeChannel == null) null
         else movableContentOf { isFs: Boolean, isMini: Boolean, isPip: Boolean, playerModifier: Modifier ->
             activeChannel?.let { ch ->
@@ -418,6 +447,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                     cookie = ch.cookie,
                     referer = ch.referer,
                     origin = ch.origin,
+                    subtitleUrl = ch.subtitleUrl ?: ch.subtitleTrack ?: activeMatch?.subtitleUrl,
+                    subtitles = ch.subtitles ?: activeMatch?.subtitles,
                     title = activeMatch?.title ?: ch.name,
                     subtitle = activeMatch?.subtitle ?: ch.category,
                     initialPositionMs = activePlaybackInitialPosition,
@@ -425,9 +456,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                     isMiniPlayer = isMini,
                     isInPipMode = isPip,
                     onBackClick = {
-                        if (isFs) {
-                            isPlayerFullscreen = false
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        if (isFs || isLandscape || isTvDevice) {
+                            closePlayerAndReturn()
                         } else {
                             // In portrait: minimize to in-app floating mini player so user can browse
                             isPlayerExpanded = false
@@ -441,10 +471,12 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             isPlayerExpanded = true
                         }
                         isPlayerFullscreen = fs
-                        activity?.requestedOrientation = if (fs) {
-                            ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
-                        } else {
-                            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        if (!isTvDevice) {
+                            activity?.requestedOrientation = if (fs) {
+                                ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                            } else {
+                                ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            }
                         }
                     },
                     onMiniPlayerToggle = {
@@ -455,14 +487,18 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             isPlayerExpanded = true
                         } else {
                             isPlayerFullscreen = false
-                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            if (!isTvDevice) {
+                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                            }
                             isPlayerExpanded = false
                         }
                     },
                     onEnterPipClick = {
                         // Collapse to in-app PiP floating mini player
                         isPlayerFullscreen = false
-                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        if (!isTvDevice) {
+                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        }
                         isPlayerExpanded = false
                     },
                     onCloseClick = { closePlayerAndReturn() },
@@ -479,8 +515,6 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         playerContent(true, false, true, Modifier.fillMaxSize())
         return
     }
-
-    val isEffectivelyFullscreen = isPlayerFullscreen || isLandscape
 
     // Toggle Immersive System Bars (Hide Status/Nav Bars in Landscape/Fullscreen Mode)
     DisposableEffect(isEffectivelyFullscreen) {
@@ -552,7 +586,9 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                 if (activeChannel != null) {
                                     isPlayerExpanded = false
                                     isPlayerFullscreen = false
-                                    activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                    if (!isTvDevice) {
+                                        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                                    }
                                 }
                             }
                             selectedTab = tab
@@ -659,6 +695,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     chatMessages = chatMessages,
                                     userProfile = userProfile,
                                     liveLikesCount = liveLikesCount,
+                                    activeStreamViewers = activeStreamViewers,
                                     showProfileDialog = showProfileDialog,
                                     onChannelSelect = { selectedCh ->
                                         viewModel.selectChannelForActiveMatch(selectedCh)
@@ -695,11 +732,13 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     selectedCategory = selectedHomeCategory,
                                     onCategorySelected = { viewModel.selectedHomeCategory.value = it },
                                     onMatchClick = { match ->
-                                        lastSourceTab = CineTab.HOME
-                                        isPlayerExpanded = true
-                                        isPlayerFullscreen = false
-                                        selectedTab = CineTab.HOME
-                                        viewModel.playMatch(match)
+                                        if (match.isLive) {
+                                            lastSourceTab = CineTab.HOME
+                                            isPlayerExpanded = true
+                                            isPlayerFullscreen = false
+                                            selectedTab = CineTab.HOME
+                                            viewModel.playMatch(match)
+                                        }
                                     },
                                     onToggleFavorite = { match -> viewModel.toggleFavoriteMatch(match) },
                                     onRefresh = { viewModel.fetchHomeMatches(isPullRefresh = true) },

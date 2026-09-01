@@ -301,7 +301,11 @@ fun HomeScreen(
                                     MatchCard(
                                         match = match,
                                         isFavorite = isFavorite,
-                                        onWatchClick = { onMatchClick(match) },
+                                        onWatchClick = {
+                                            if (match.isLive) {
+                                                onMatchClick(match)
+                                            }
+                                        },
                                         onToggleFavorite = { onToggleFavorite(match) }
                                     )
                                 }
@@ -324,7 +328,11 @@ fun HomeScreen(
                                             MatchCard(
                                                 match = match,
                                                 isFavorite = isFavorite,
-                                                onWatchClick = { onMatchClick(match) },
+                                                onWatchClick = {
+                                                    if (match.isLive) {
+                                                        onMatchClick(match)
+                                                    }
+                                                },
                                                 onToggleFavorite = { onToggleFavorite(match) }
                                             )
                                         }
@@ -388,7 +396,7 @@ fun MatchCard(
                 elevationOnFocus = 8.dp
             )
             .cineSharedBounds("card_${match.id}")
-            .clickable(onClick = onWatchClick)
+            .clickable(enabled = isLiveOrStreaming, onClick = onWatchClick)
     ) {
         Column {
             // Visual Banner Image / Poster with Team A vs Team B Overlay on Bottom
