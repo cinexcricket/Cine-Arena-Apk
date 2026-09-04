@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Movie
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -444,25 +443,6 @@ fun MovieCard(
                             contentDescription = "Favorite",
                             tint = if (isFavorite) CineLiveRed else Color.White,
                             modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-
-                // Center Play Button Overlay
-                Surface(
-                    shape = CircleShape,
-                    color = if (isPlaying) CinePrimary else Color.Black.copy(alpha = 0.65f),
-                    border = BorderStroke(1.dp, if (isPlaying) Color.White else CinePrimary),
-                    modifier = Modifier
-                        .size(38.dp)
-                        .align(Alignment.Center)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.PlayArrow,
-                            contentDescription = "Play",
-                            tint = if (isPlaying) Color.White else CinePrimary,
-                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }

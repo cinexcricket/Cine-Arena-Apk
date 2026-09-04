@@ -253,6 +253,7 @@ fun CinePlayerView(
     isMiniPlayer: Boolean = false,
     isFullscreen: Boolean = false,
     isInPipMode: Boolean = false,
+    defaultResizeMode: VideoResizeMode = VideoResizeMode.FIT,
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
@@ -269,6 +270,7 @@ fun CinePlayerView(
             isMiniPlayer = isMiniPlayer,
             isFullscreen = isFullscreen,
             isInPipMode = isInPipMode,
+            defaultResizeMode = defaultResizeMode,
             onBackClick = onBackClick,
             onFullscreenToggle = onFullscreenToggle,
             onMiniPlayerToggle = onMiniPlayerToggle,
@@ -292,6 +294,7 @@ fun CinePlayerView(
             isMiniPlayer = isMiniPlayer,
             isFullscreen = isFullscreen,
             isInPipMode = isInPipMode,
+            defaultResizeMode = defaultResizeMode,
             onBackClick = onBackClick,
             onFullscreenToggle = onFullscreenToggle,
             onMiniPlayerToggle = onMiniPlayerToggle,
@@ -320,6 +323,7 @@ fun ExoStreamPlayer(
     isMiniPlayer: Boolean = false,
     isFullscreen: Boolean = false,
     isInPipMode: Boolean = false,
+    defaultResizeMode: VideoResizeMode = VideoResizeMode.FIT,
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
@@ -333,7 +337,7 @@ fun ExoStreamPlayer(
 
     var isPlaying by remember { mutableStateOf(true) }
     var isMuted by remember { mutableStateOf(false) }
-    var resizeMode by remember { mutableStateOf(VideoResizeMode.FIT) }
+    var resizeMode by remember(defaultResizeMode) { mutableStateOf(defaultResizeMode) }
     var aspectToastText by remember { mutableStateOf<String?>(null) }
     var currentVideoSize by remember { mutableStateOf<androidx.media3.common.VideoSize?>(null) }
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
@@ -468,6 +472,10 @@ fun ExoStreamPlayer(
         }
     }
 
+    var streamFormatOverride by remember(streamUrl) { mutableStateOf<String?>(null) }
+    var currentIsHls by remember(streamUrl) { mutableStateOf(false) }
+    var currentIsTs by remember(streamUrl) { mutableStateOf(false) }
+
     val isDash = remember(streamUrl, streamType) {
         streamType.equals("dash", ignoreCase = true) ||
         streamType.equals("mpd", ignoreCase = true) ||
@@ -480,7 +488,7 @@ fun ExoStreamPlayer(
         streamUrl.contains(".m3u8", ignoreCase = true)
     }
 
-    val exoPlayer = remember(streamUrl, streamType, drmConfig, cookie, referer, origin, retryCount) {
+    val exoPlayer = remember(streamUrl, streamType, drmConfig, cookie, referer, origin, retryCount, streamFormatOverride) {
         try {
             val parsed = StreamUrlParser.parse(
                 rawUrl = streamUrl,
@@ -494,7 +502,7 @@ fun ExoStreamPlayer(
             val activeUrl = parsed.cleanUrl
             if (activeUrl.isBlank()) return@remember null
 
-            val activeType = parsed.streamType
+            val activeType = streamFormatOverride ?: parsed.streamType
             val activeCookie = parsed.cookie
             val activeReferer = parsed.referer
             val activeOrigin = parsed.origin
@@ -526,8 +534,18 @@ fun ExoStreamPlayer(
                     activeUrl.endsWith(".avi", ignoreCase = true) ||
                     activeUrl.contains(".avi", ignoreCase = true)
 
-            val isDashStream = !isMp4Stream && (isDash || activeType.equals("dash", ignoreCase = true) || activeType.equals("mpd", ignoreCase = true) || activeUrl.contains(".mpd", ignoreCase = true))
-            val isHlsStream = !isMp4Stream && !isDashStream && (isHls || activeType.equals("hls", ignoreCase = true) || activeType.equals("m3u8", ignoreCase = true) || activeUrl.contains(".m3u8", ignoreCase = true))
+            val isDashStream = !isMp4Stream && (isDash || activeType.equals("dash", ignoreCase = true) || activeType.equals("mpd", ignoreCase = true) || activeUrl.contains(".mpd", ignoreCase = true) || (activeDrm != null && !activeDrm.licenseUrl.isNullOrBlank()))
+
+            val isTsStream = !isMp4Stream && !isDashStream && (
+                    activeType.equals("ts", ignoreCase = true) ||
+                    activeUrl.endsWith(".ts", ignoreCase = true) ||
+                    activeUrl.contains(".ts?", ignoreCase = true) ||
+                    Regex("""^https?://[^/]+/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/\d+(\?.*)?$""").matches(activeUrl)
+            )
+
+            val isHlsStream = !isMp4Stream && !isDashStream && !isTsStream
+            currentIsHls = isHlsStream
+            currentIsTs = isTsStream
 
             val mediaItemBuilder = MediaItem.Builder().setUri(activeUrl)
 
@@ -537,6 +555,8 @@ fun ExoStreamPlayer(
                 mediaItemBuilder.setMimeType(MimeTypes.APPLICATION_M3U8)
             } else if (isMp4Stream) {
                 mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP4)
+            } else if (isTsStream) {
+                mediaItemBuilder.setMimeType(MimeTypes.VIDEO_MP2T)
             }
 
             val subConfigs = mutableListOf<MediaItem.SubtitleConfiguration>()
@@ -765,6 +785,19 @@ fun ExoStreamPlayer(
             override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
                 isBuffering = false
                 val cause = error.cause
+                val errMsg = error.message ?: ""
+
+                // Automatic resilient format fallback between HLS and TS if stream type was misclassified
+                if (streamFormatOverride == null && (cause is androidx.media3.common.ParserException || errMsg.contains("None of the available extractors", ignoreCase = true) || errMsg.contains("UnrecognizedInputFormatException", ignoreCase = true))) {
+                    if (currentIsHls) {
+                        streamFormatOverride = "ts"
+                        return
+                    } else if (currentIsTs) {
+                        streamFormatOverride = "hls"
+                        return
+                    }
+                }
+
                 val msg = when {
                     cause is androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException && cause.responseCode == 403 ->
                         "Stream server returned 403 (Forbidden). The stream link may require auth tokens or has expired."
@@ -2478,6 +2511,7 @@ fun IframeStreamPlayer(
     isMiniPlayer: Boolean = false,
     isFullscreen: Boolean = false,
     isInPipMode: Boolean = false,
+    defaultResizeMode: VideoResizeMode = VideoResizeMode.FIT,
     onBackClick: () -> Unit = {},
     onFullscreenToggle: (Boolean) -> Unit = {},
     onMiniPlayerToggle: (Boolean) -> Unit = {},
@@ -2489,7 +2523,7 @@ fun IframeStreamPlayer(
     val activity = context as? Activity
     val isPip = isInPipMode || (activity?.isInPictureInPictureMode == true)
     var showIframeControls by remember { mutableStateOf(true) }
-    var resizeMode by remember { mutableStateOf(VideoResizeMode.FIT) }
+    var resizeMode by remember(defaultResizeMode) { mutableStateOf(defaultResizeMode) }
     var aspectToastText by remember { mutableStateOf<String?>(null) }
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var isScreenLocked by remember { mutableStateOf(false) }

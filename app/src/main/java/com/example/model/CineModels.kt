@@ -24,7 +24,9 @@ data class MatchItem(
     @Json(name = "categories") val categories: String? = null,
     @Json(name = "heading") val heading: String? = null,
     @Json(name = "subtitleUrl") val subtitleUrl: String? = null,
-    @Json(name = "subtitles") val subtitles: List<SubtitleTrackItem>? = null
+    @Json(name = "subtitles") val subtitles: List<SubtitleTrackItem>? = null,
+    @Json(name = "metadata") val metadata: MovieMetadata? = null,
+    @Json(name = "trailer") val trailer: MovieTrailer? = null
 ) {
     val displayCategory: String
         get() = categories?.takeIf { it.isNotBlank() }
@@ -136,4 +138,20 @@ data class ChatMessage(
     val senderPhone: String? = null,
     val avatarUrl: String? = null,
     val isMe: Boolean = false
+)
+
+@JsonClass(generateAdapter = true)
+data class MovieMetadata(
+    @Json(name = "imdbRating") val imdbRating: String? = null,
+    @Json(name = "genre") val genre: List<String>? = emptyList(),
+    @Json(name = "stars") val stars: List<String>? = emptyList(),
+    @Json(name = "director") val director: String? = null,
+    @Json(name = "language") val language: String? = null,
+    @Json(name = "quality") val quality: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class MovieTrailer(
+    @Json(name = "embedUrl") val embedUrl: String? = null,
+    @Json(name = "title") val title: String? = null
 )

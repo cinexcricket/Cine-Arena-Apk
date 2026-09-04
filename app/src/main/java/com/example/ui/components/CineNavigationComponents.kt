@@ -91,34 +91,9 @@ fun CineTopAppBar(
             }
         },
         actions = {
-            // Mode Switching Button (Left of Telegram icon)
+            // Mode Switching Button
             IconButton(
                 onClick = onToggleDarkMode,
-                modifier = Modifier
-                    .size(38.dp)
-                    .background(CinePrimaryContainer, CircleShape)
-                    .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White)
-            ) {
-                Icon(
-                    imageVector = if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
-                    contentDescription = "Switch Theme Mode",
-                    tint = if (isDarkMode) Color.White else CinePrimary,
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-
-            Spacer(modifier = Modifier.width(8.dp))
-
-            // Telegram Action Button
-            IconButton(
-                onClick = {
-                    try {
-                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/+052xVyIlae9lZTZl"))
-                        context.startActivity(intent)
-                    } catch (e: Exception) {
-                        Toast.makeText(context, "Opening Telegram...", Toast.LENGTH_SHORT).show()
-                    }
-                },
                 modifier = Modifier
                     .padding(end = 12.dp)
                     .size(38.dp)
@@ -126,8 +101,8 @@ fun CineTopAppBar(
                     .dpadFocusable(shape = CircleShape, focusedBorderColor = Color.White)
             ) {
                 Icon(
-                    Icons.Default.Send,
-                    contentDescription = "Telegram",
+                    imageVector = if (isDarkMode) Icons.Default.LightMode else Icons.Default.DarkMode,
+                    contentDescription = "Switch Theme Mode",
                     tint = if (isDarkMode) Color.White else CinePrimary,
                     modifier = Modifier.size(20.dp)
                 )
@@ -142,6 +117,10 @@ enum class CineTab(val label: String, val icon: @Composable () -> Unit) {
     SPORTS("Sports", { Icon(Icons.Default.EmojiEvents, contentDescription = "Sports") }),
     TV("TV", { Icon(Icons.Default.Tv, contentDescription = "TV") }),
     HISTORY("History", { Icon(Icons.Default.History, contentDescription = "History") }),
+    IPTV_PLAYER("IPTV Player", { Icon(Icons.Default.PlaylistPlay, contentDescription = "IPTV Player") }),
+    JIO_TV_WW("Jio-Tv (World Wide)", { Icon(Icons.Default.Public, contentDescription = "Jio-Tv World Wide") }),
+    AIRTEL_TV("Airtel TV", { Icon(Icons.Default.LiveTv, contentDescription = "Airtel TV") }),
+    JIO_TV("Jio Tv (India Only)", { Icon(Icons.Default.Tv, contentDescription = "Jio TV") }),
     FAVORITES("Favorites", { Icon(Icons.Default.Favorite, contentDescription = "Favorites") }),
     MOVIES("Movies", { Icon(Icons.Default.Movie, contentDescription = "Movies") })
 }
@@ -195,7 +174,13 @@ fun CineBottomNavBar(
 fun CineDrawerContent(
     onOpenNetworkStream: () -> Unit,
     onOpenHistory: () -> Unit = {},
+    onOpenIptvPlayer: () -> Unit = {},
+    onOpenJioTvWw: () -> Unit = {},
+    onOpenAirtelTv: () -> Unit = {},
+    onOpenJioTv: () -> Unit = {},
     onOpenFavorites: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
+    onCheckForUpdates: (() -> Unit)? = null,
     onCloseDrawer: () -> Unit
 ) {
     val context = LocalContext.current
@@ -237,7 +222,7 @@ fun CineDrawerContent(
                     color = CineTextPrimary
                 )
                 Text(
-                    text = "Version: 5.0",
+                    text = "Version: ${com.example.BuildConfig.VERSION_NAME}",
                     fontSize = 12.sp,
                     color = CineTextSecondary
                 )
@@ -266,6 +251,42 @@ fun CineDrawerContent(
         )
 
         DrawerMenuItem(
+            icon = Icons.Default.PlaylistPlay,
+            title = "IPTV Player",
+            onClick = {
+                onCloseDrawer()
+                onOpenIptvPlayer()
+            }
+        )
+
+        DrawerMenuItem(
+            icon = Icons.Default.Public,
+            title = "Jio-Tv (World Wide)",
+            onClick = {
+                onCloseDrawer()
+                onOpenJioTvWw()
+            }
+        )
+
+        DrawerMenuItem(
+            icon = Icons.Default.LiveTv,
+            title = "Airtel Tv",
+            onClick = {
+                onCloseDrawer()
+                onOpenAirtelTv()
+            }
+        )
+
+        DrawerMenuItem(
+            icon = Icons.Default.Tv,
+            title = "Jio Tv (India Only)",
+            onClick = {
+                onCloseDrawer()
+                onOpenJioTv()
+            }
+        )
+
+        DrawerMenuItem(
             icon = Icons.Default.Favorite,
             title = "Favorites",
             tint = CineTextPrimary,
@@ -276,28 +297,12 @@ fun CineDrawerContent(
         )
 
         DrawerMenuItem(
-            icon = Icons.AutoMirrored.Filled.Chat,
-            title = "Telegram",
+            icon = Icons.Default.Settings,
+            title = "Settings",
+            tint = CineTextPrimary,
             onClick = {
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://t.me/+052xVyIlae9lZTZl")))
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Telegram link copied", Toast.LENGTH_SHORT).show()
-                }
                 onCloseDrawer()
-            }
-        )
-
-        DrawerMenuItem(
-            icon = Icons.Default.Language,
-            title = "Website",
-            onClick = {
-                try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://cinexcricket.com")))
-                } catch (e: Exception) {
-                    Toast.makeText(context, "Opening website...", Toast.LENGTH_SHORT).show()
-                }
-                onCloseDrawer()
+                onOpenSettings()
             }
         )
 
@@ -316,10 +321,23 @@ fun CineDrawerContent(
         )
 
         DrawerMenuItem(
+            icon = Icons.Default.SystemUpdate,
+            title = "Check for Updates",
+            onClick = {
+                onCloseDrawer()
+                if (onCheckForUpdates != null) {
+                    onCheckForUpdates()
+                } else {
+                    Toast.makeText(context, "Checking for latest updates...", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+
+        DrawerMenuItem(
             icon = Icons.Default.Info,
             title = "Copyright",
             onClick = {
-                Toast.makeText(context, "Cine Arena v5.0 • All rights reserved", Toast.LENGTH_LONG).show()
+                Toast.makeText(context, "Cine Arena v${com.example.BuildConfig.VERSION_NAME} • All rights reserved", Toast.LENGTH_LONG).show()
                 onCloseDrawer()
             }
         )

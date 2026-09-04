@@ -85,13 +85,14 @@ object ClearKeyUtil {
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent("Mozilla/5.0 (Linux; Android 13; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36")
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(4000)
-            .setReadTimeoutMs(6000)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(20000)
             .setKeepPostFor302Redirects(true)
 
         val headers = mutableMapOf<String, String>()
         headers["Accept"] = "*/*"
         headers["Accept-Language"] = "en-US,en;q=0.9"
+        headers["Connection"] = "keep-alive"
 
         if (!cookie.isNullOrBlank()) headers["Cookie"] = cookie.trim()
 

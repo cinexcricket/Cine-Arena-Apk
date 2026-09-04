@@ -7,6 +7,7 @@ import com.example.data.ContinueWatchingEntity
 import com.example.data.FavoriteDao
 import com.example.data.FavoriteEntity
 import com.example.data.UserProfileEntity
+import com.example.model.ChannelItem
 import com.example.model.ChannelsData
 import com.example.model.MatchData
 import com.example.model.MovieResponse
@@ -305,4 +306,222 @@ class CineRepository(
             RetrofitClient.getOkHttpClient().newCall(request).execute()
         } catch (_: Exception) {}
     }
+
+    suspend fun fetchAirtelTvChannels(
+        context: android.content.Context,
+        isPullRefresh: Boolean = false
+    ): Result<AirtelTvResult> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val cacheFile = java.io.File(context.cacheDir, "airteltv_cache.json")
+            val tempFile = java.io.File(context.cacheDir, "airteltv_cache.json.tmp")
+            val url = "https://playlist-september26.pages.dev/airteltv.json"
+            val maxCacheAgeMs = 12 * 3600 * 1000L // 12 hours cache valid
+
+            val needsDownload = isPullRefresh ||
+                    !cacheFile.exists() ||
+                    cacheFile.length() < 1000L ||
+                    (System.currentTimeMillis() - cacheFile.lastModified() > maxCacheAgeMs)
+
+            if (needsDownload) {
+                try {
+                    val request = okhttp3.Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "Mozilla/5.0 (Android; CineArena/5.0)")
+                        .build()
+                    val response = RetrofitClient.getOkHttpClient().newCall(request).execute()
+                    if (!response.isSuccessful) {
+                        if (!cacheFile.exists() || cacheFile.length() < 1000L) {
+                            throw java.io.IOException("HTTP error ${response.code}")
+                        }
+                    } else {
+                        val body = response.body ?: throw java.io.IOException("Empty response")
+                        body.byteStream().use { input ->
+                            tempFile.outputStream().use { output ->
+                                val buffer = ByteArray(32768)
+                                var read: Int
+                                while (input.read(buffer).also { read = it } != -1) {
+                                    output.write(buffer, 0, read)
+                                }
+                                output.flush()
+                            }
+                        }
+                        if (tempFile.exists() && tempFile.length() > 1000L) {
+                            if (cacheFile.exists()) cacheFile.delete()
+                            tempFile.renameTo(cacheFile)
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (!cacheFile.exists() || cacheFile.length() < 1000L) {
+                        throw e
+                    }
+                }
+            }
+
+            if (!cacheFile.exists() || cacheFile.length() < 1000L) {
+                throw java.io.IOException("Airtel TV playlist could not be retrieved")
+            }
+
+            val categoriesList = mutableListOf<String>()
+            val categoriesMap = LinkedHashMap<String, MutableList<ChannelItem>>()
+            val allChannelsList = mutableListOf<ChannelItem>()
+
+            java.io.FileInputStream(cacheFile).use { fileInput ->
+                java.io.BufferedReader(java.io.InputStreamReader(fileInput, Charsets.UTF_8), 32768).use { bufferedReader ->
+                    val reader = android.util.JsonReader(bufferedReader)
+                    reader.beginObject()
+                    while (reader.hasNext()) {
+                        val topKey = reader.nextName()
+                        if (topKey == "categories") {
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                val categoryName = reader.nextName()
+                                categoriesList.add(categoryName)
+                                val catChannels = mutableListOf<ChannelItem>()
+                                reader.beginArray()
+                                while (reader.hasNext()) {
+                                    reader.beginObject()
+                                    var id = ""
+                                    var name = ""
+                                    var logo: String? = null
+                                    var streamUrl = ""
+                                    while (reader.hasNext()) {
+                                        when (reader.nextName()) {
+                                            "id" -> id = reader.nextString()
+                                            "name" -> name = reader.nextString()
+                                            "logo" -> {
+                                                if (reader.peek() == android.util.JsonToken.NULL) {
+                                                    reader.nextNull()
+                                                } else {
+                                                    logo = reader.nextString()
+                                                }
+                                            }
+                                            "url" -> streamUrl = reader.nextString()
+                                            else -> reader.skipValue()
+                                        }
+                                    }
+                                    reader.endObject()
+                                    if (streamUrl.isNotBlank() && name.isNotBlank()) {
+                                        val item = ChannelItem(
+                                            id = if (id.isNotBlank()) "airtel_$id" else "airtel_${System.identityHashCode(streamUrl)}",
+                                            name = name,
+                                            category = categoryName,
+                                            logo = logo?.takeIf { it.isNotBlank() },
+                                            status = "LIVE",
+                                            streamType = "hls",
+                                            streamUrl = streamUrl
+                                        )
+                                        catChannels.add(item)
+                                        allChannelsList.add(item)
+                                    }
+                                }
+                                reader.endArray()
+                                categoriesMap[categoryName] = catChannels
+                            }
+                            reader.endObject()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    reader.endObject()
+                }
+            }
+
+            AirtelTvResult(
+                categories = listOf("All Channels") + categoriesList,
+                allChannels = allChannelsList,
+                channelsByCategory = categoriesMap
+            )
+        }
+    }
+
+    suspend fun fetchJioWwChannels(
+        context: android.content.Context,
+        isPullRefresh: Boolean = false
+    ): Result<com.example.util.M3uParseResult> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val cacheFile = java.io.File(context.cacheDir, "jioww_cache.m3u")
+            val tempFile = java.io.File(context.cacheDir, "jioww_cache.m3u.tmp")
+            val url = "https://playlist-september26.pages.dev/jio-ww-lookme.m3u"
+            val maxCacheAgeMs = 12 * 3600 * 1000L
+
+            val needsDownload = isPullRefresh ||
+                    !cacheFile.exists() ||
+                    cacheFile.length() < 100L ||
+                    (System.currentTimeMillis() - cacheFile.lastModified() > maxCacheAgeMs)
+
+            if (needsDownload) {
+                try {
+                    val request = okhttp3.Request.Builder()
+                        .url(url)
+                        .header("User-Agent", "Mozilla/5.0 (Android; CineArena/5.0)")
+                        .build()
+                    val response = RetrofitClient.getOkHttpClient().newCall(request).execute()
+                    if (response.isSuccessful) {
+                        val body = response.body ?: throw java.io.IOException("Empty body")
+                        body.byteStream().use { input ->
+                            tempFile.outputStream().use { output ->
+                                val buffer = ByteArray(32768)
+                                var read: Int
+                                while (input.read(buffer).also { read = it } != -1) {
+                                    output.write(buffer, 0, read)
+                                }
+                                output.flush()
+                            }
+                        }
+                        if (tempFile.exists() && tempFile.length() > 100L) {
+                            if (cacheFile.exists()) cacheFile.delete()
+                            tempFile.renameTo(cacheFile)
+                        }
+                    }
+                } catch (e: Exception) {
+                    if (!cacheFile.exists() || cacheFile.length() < 100L) {
+                        throw e
+                    }
+                }
+            }
+
+            if (!cacheFile.exists() || cacheFile.length() < 100L) {
+                throw java.io.IOException("Failed to retrieve Jio-Tv Worldwide playlist")
+            }
+
+            java.io.FileInputStream(cacheFile).use { input ->
+                com.example.util.M3uParser.parseStream(
+                    inputStream = input,
+                    idPrefix = "jioww",
+                    defaultReferer = "https://hey-lookme.shop/"
+                )
+            }
+        }
+    }
+
+    suspend fun fetchCustomPlaylist(
+        urlOrContent: String
+    ): Result<com.example.util.M3uParseResult> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        runCatching {
+            val trimmed = urlOrContent.trim()
+            if (trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true)) {
+                val request = okhttp3.Request.Builder()
+                    .url(trimmed)
+                    .header("User-Agent", "Mozilla/5.0 (Android; CineArena/5.0)")
+                    .build()
+                val response = RetrofitClient.getOkHttpClient().newCall(request).execute()
+                if (!response.isSuccessful) {
+                    throw java.io.IOException("Failed to download playlist: HTTP ${response.code}")
+                }
+                val body = response.body ?: throw java.io.IOException("Empty response body")
+                body.byteStream().use { input ->
+                    com.example.util.M3uParser.parseStream(input, idPrefix = "custom_iptv")
+                }
+            } else {
+                // Parse directly as M3U text
+                com.example.util.M3uParser.parseText(trimmed, idPrefix = "custom_iptv")
+            }
+        }
+    }
 }
+
+data class AirtelTvResult(
+    val categories: List<String>,
+    val allChannels: List<ChannelItem>,
+    val channelsByCategory: Map<String, List<ChannelItem>>
+)

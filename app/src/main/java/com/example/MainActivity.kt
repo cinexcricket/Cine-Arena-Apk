@@ -36,6 +36,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LiveTv
+import androidx.compose.material.icons.filled.PlaylistPlay
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Tv
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -273,9 +278,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val liveLikesCount by viewModel.liveMatchLikes.collectAsState()
     val activeStreamViewers by viewModel.activeStreamViewers.collectAsState()
     val showProfileDialog by viewModel.showProfileDialog.collectAsState()
+    val showSettingsDialog by viewModel.showSettingsDialog.collectAsState()
+    val defaultAspectRatio by viewModel.defaultAspectRatio.collectAsState()
+    val alwaysLandscape by viewModel.alwaysLandscape.collectAsState()
+    val appUpdateInfo by viewModel.appUpdateInfo.collectAsState()
+    val updateDownloadState by viewModel.updateDownloadState.collectAsState()
 
     // Orientation Event Listener to unlock rotation ONLY when phone auto-rotation is ON
-    DisposableEffect(context, activeChannel, isTvDevice) {
+    DisposableEffect(context, activeChannel, isTvDevice, alwaysLandscape) {
         if (isTvDevice) {
             return@DisposableEffect onDispose {}
         }
@@ -306,8 +316,10 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                         isPlayerFullscreen = true
                         activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
                     } else if (isPortraitAngle && isPlayerFullscreen) {
-                        isPlayerFullscreen = false
-                        activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        if (!alwaysLandscape) {
+                            isPlayerFullscreen = false
+                            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+                        }
                     }
                 }
             }
@@ -338,6 +350,42 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     val searchQueryTv by viewModel.searchQueryTv.collectAsState()
     val searchQuerySports by viewModel.searchQuerySports.collectAsState()
     val searchQueryMovies by viewModel.searchQueryMovies.collectAsState()
+
+    val airtelChannelsState by viewModel.airtelChannelsState.collectAsState()
+    val airtelCategories by viewModel.airtelCategories.collectAsState()
+    val selectedAirtelCategory by viewModel.selectedAirtelCategory.collectAsState()
+    val searchQueryAirtel by viewModel.searchQueryAirtel.collectAsState()
+    val isRefreshingAirtel by viewModel.isRefreshingAirtel.collectAsState()
+    val airtelHasMore by viewModel.airtelHasMore.collectAsState()
+    val airtelTotalCount by viewModel.airtelTotalCount.collectAsState()
+
+    val jioWwChannelsState by viewModel.jioWwChannelsState.collectAsState()
+    val jioWwCategories by viewModel.jioWwCategories.collectAsState()
+    val selectedJioWwCategory by viewModel.selectedJioWwCategory.collectAsState()
+    val searchQueryJioWw by viewModel.searchQueryJioWw.collectAsState()
+    val isRefreshingJioWw by viewModel.isRefreshingJioWw.collectAsState()
+    val jioWwHasMore by viewModel.jioWwHasMore.collectAsState()
+    val jioWwTotalCount by viewModel.jioWwTotalCount.collectAsState()
+
+    val customIptvInput by viewModel.customIptvInput.collectAsState()
+    val iptvChannelsState by viewModel.iptvChannelsState.collectAsState()
+    val iptvCategories by viewModel.iptvCategories.collectAsState()
+    val selectedIptvCategory by viewModel.selectedIptvCategory.collectAsState()
+    val searchQueryIptv by viewModel.searchQueryIptv.collectAsState()
+    val isCustomIptvLoading by viewModel.isCustomIptvLoading.collectAsState()
+    val iptvHasMore by viewModel.iptvHasMore.collectAsState()
+    val iptvTotalCount by viewModel.iptvTotalCount.collectAsState()
+
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == CineTab.AIRTEL_TV) {
+            viewModel.loadAirtelTvIfNeeded()
+        } else if (selectedTab == CineTab.JIO_TV_WW) {
+            viewModel.loadJioWwIfNeeded()
+        } else if (selectedTab == CineTab.IPTV_PLAYER) {
+            viewModel.loadSavedIptvIfNeeded()
+        }
+    }
+
     val continueWatchingList by viewModel.continueWatchingList.collectAsState()
     val activePlaybackInitialPosition by viewModel.activePlaybackInitialPosition.collectAsState()
 
@@ -390,10 +438,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
     }
 
     // Automatically expand player whenever a new channel/match starts playing and update PIP params
-    LaunchedEffect(activeChannel) {
+    LaunchedEffect(activeChannel, alwaysLandscape) {
         if (activeChannel != null) {
             showSplashScreen = false
             isPlayerExpanded = true
+            if (alwaysLandscape && !isTvDevice) {
+                isPlayerFullscreen = true
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            }
         }
         (activity as? MainActivity)?.updatePipParams(activeChannel != null)
     }
@@ -436,7 +488,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
         }
     }
 
-    val playerContent = remember(activeChannel, activeMatch, activePlaybackInitialPosition, isTvDevice) {
+    val playerContent = remember(activeChannel, activeMatch, activePlaybackInitialPosition, isTvDevice, defaultAspectRatio) {
         if (activeChannel == null) null
         else movableContentOf { isFs: Boolean, isMini: Boolean, isPip: Boolean, playerModifier: Modifier ->
             activeChannel?.let { ch ->
@@ -455,6 +507,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                     isFullscreen = isFs,
                     isMiniPlayer = isMini,
                     isInPipMode = isPip,
+                    defaultResizeMode = defaultAspectRatio,
                     onBackClick = {
                         if (isFs || isLandscape || isTvDevice) {
                             closePlayerAndReturn()
@@ -557,7 +610,13 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                 CineDrawerContent(
                     onOpenNetworkStream = { showNetworkStreamDialog = true },
                     onOpenHistory = { selectedTab = CineTab.HISTORY },
+                    onOpenIptvPlayer = { selectedTab = CineTab.IPTV_PLAYER },
+                    onOpenJioTvWw = { selectedTab = CineTab.JIO_TV_WW },
+                    onOpenAirtelTv = { selectedTab = CineTab.AIRTEL_TV },
+                    onOpenJioTv = { selectedTab = CineTab.JIO_TV },
                     onOpenFavorites = { selectedTab = CineTab.FAVORITES },
+                    onOpenSettings = { viewModel.openSettingsDialog() },
+                    onCheckForUpdates = { viewModel.checkForAppUpdate() },
                     onCloseDrawer = {
                         scope.launch { drawerState.close() }
                     }
@@ -634,12 +693,14 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             onRefresh = { viewModel.fetchSportsChannels(isPullRefresh = true) },
                             isRefreshing = isRefreshingSports
                         )
-                    } else if (selectedTab == CineTab.TV) {
+                    } else if (selectedTab == CineTab.TV || selectedTab == CineTab.JIO_TV) {
                         TvScreen(
                             tvChannelsState = tvChannelsState,
                             favorites = favorites,
                             selectedCategory = selectedTvCategory,
                             searchQuery = searchQueryTv,
+                            screenTitle = if (selectedTab == CineTab.JIO_TV) "Jio TV (India Only)" else "TV Channels",
+                            screenIcon = Icons.Default.Tv,
                             activeChannel = activeChannel,
                             playerContent = {
                                 playerContent(
@@ -652,7 +713,7 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             onCategorySelected = { viewModel.selectedTvCategory.value = it },
                             onSearchQueryChange = { viewModel.searchQueryTv.value = it },
                             onChannelClick = { channel ->
-                                lastSourceTab = CineTab.TV
+                                lastSourceTab = selectedTab
                                 isPlayerExpanded = true
                                 isPlayerFullscreen = false
                                 viewModel.playChannel(channel)
@@ -660,6 +721,105 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                             onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
                             onRefresh = { viewModel.fetchTvChannels(isPullRefresh = true) },
                             isRefreshing = isRefreshingTv
+                        )
+                    } else if (selectedTab == CineTab.AIRTEL_TV) {
+                        TvScreen(
+                            tvChannelsState = airtelChannelsState,
+                            favorites = favorites,
+                            selectedCategory = selectedAirtelCategory,
+                            searchQuery = searchQueryAirtel,
+                            screenTitle = "Airtel TV",
+                            screenIcon = Icons.Default.LiveTv,
+                            providedCategories = airtelCategories,
+                            totalChannelsCount = if (airtelTotalCount > 0) airtelTotalCount else null,
+                            hasMore = airtelHasMore,
+                            onLoadMore = { viewModel.loadMoreAirtelChannels() },
+                            activeChannel = activeChannel,
+                            playerContent = {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier.fillMaxSize()
+                                )
+                            },
+                            onCategorySelected = { viewModel.selectedAirtelCategory.value = it },
+                            onSearchQueryChange = { viewModel.searchQueryAirtel.value = it },
+                            onChannelClick = { channel ->
+                                lastSourceTab = CineTab.AIRTEL_TV
+                                isPlayerExpanded = true
+                                isPlayerFullscreen = false
+                                viewModel.playChannel(channel)
+                            },
+                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                            onRefresh = { viewModel.loadAirtelTvIfNeeded(isPullRefresh = true) },
+                            isRefreshing = isRefreshingAirtel
+                        )
+                    } else if (selectedTab == CineTab.JIO_TV_WW) {
+                        TvScreen(
+                            tvChannelsState = jioWwChannelsState,
+                            favorites = favorites,
+                            selectedCategory = selectedJioWwCategory,
+                            searchQuery = searchQueryJioWw,
+                            screenTitle = "Jio-Tv (World Wide)",
+                            screenIcon = Icons.Default.Public,
+                            providedCategories = jioWwCategories,
+                            totalChannelsCount = if (jioWwTotalCount > 0) jioWwTotalCount else null,
+                            hasMore = jioWwHasMore,
+                            onLoadMore = { viewModel.loadMoreJioWwChannels() },
+                            activeChannel = activeChannel,
+                            playerContent = {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier.fillMaxSize()
+                                )
+                            },
+                            onCategorySelected = { viewModel.selectedJioWwCategory.value = it },
+                            onSearchQueryChange = { viewModel.searchQueryJioWw.value = it },
+                            onChannelClick = { channel ->
+                                lastSourceTab = CineTab.JIO_TV_WW
+                                isPlayerExpanded = true
+                                isPlayerFullscreen = false
+                                viewModel.playChannel(channel)
+                            },
+                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                            onRefresh = { viewModel.loadJioWwIfNeeded(isPullRefresh = true) },
+                            isRefreshing = isRefreshingJioWw
+                        )
+                    } else if (selectedTab == CineTab.IPTV_PLAYER) {
+                        IptvPlayerScreen(
+                            channelsState = iptvChannelsState,
+                            favorites = favorites,
+                            selectedCategory = selectedIptvCategory,
+                            searchQuery = searchQueryIptv,
+                            categories = iptvCategories,
+                            totalChannelsCount = iptvTotalCount,
+                            hasMore = iptvHasMore,
+                            onLoadMore = { viewModel.loadMoreIptvChannels() },
+                            activeChannel = activeChannel,
+                            playerContent = {
+                                playerContent(
+                                    false,
+                                    false,
+                                    false,
+                                    Modifier.fillMaxSize()
+                                )
+                            },
+                            currentPlaylistInput = customIptvInput,
+                            isLoading = isCustomIptvLoading,
+                            onLoadPlaylist = { input -> viewModel.loadIptvPlaylist(input) },
+                            onDeletePlaylist = { viewModel.deleteIptvPlaylist() },
+                            onCategorySelected = { viewModel.selectedIptvCategory.value = it },
+                            onSearchQueryChange = { viewModel.searchQueryIptv.value = it },
+                            onChannelClick = { channel ->
+                                lastSourceTab = CineTab.IPTV_PLAYER
+                                isPlayerExpanded = true
+                                isPlayerFullscreen = false
+                                viewModel.playChannel(channel)
+                            },
+                            onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) }
                         )
                     } else {
                         val currentItemId = activeMatch?.id ?: activeChannel?.id ?: ""
@@ -772,6 +932,8 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     favorites = favorites,
                                     selectedCategory = selectedTvCategory,
                                     searchQuery = searchQueryTv,
+                                    screenTitle = "TV Channels",
+                                    screenIcon = Icons.Default.Tv,
                                     activeChannel = activeChannel,
                                     playerContent = null,
                                     onCategorySelected = { viewModel.selectedTvCategory.value = it },
@@ -785,6 +947,110 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                     onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
                                     onRefresh = { viewModel.fetchTvChannels(isPullRefresh = true) },
                                     isRefreshing = isRefreshingTv
+                                )
+                            }
+                            CineTab.JIO_TV -> {
+                                TvScreen(
+                                    tvChannelsState = tvChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedTvCategory,
+                                    searchQuery = searchQueryTv,
+                                    screenTitle = "Jio TV (India Only)",
+                                    screenIcon = Icons.Default.Tv,
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    onCategorySelected = { viewModel.selectedTvCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryTv.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.JIO_TV
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                                    onRefresh = { viewModel.fetchTvChannels(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingTv
+                                )
+                            }
+                            CineTab.AIRTEL_TV -> {
+                                TvScreen(
+                                    tvChannelsState = airtelChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedAirtelCategory,
+                                    searchQuery = searchQueryAirtel,
+                                    screenTitle = "Airtel TV",
+                                    screenIcon = Icons.Default.LiveTv,
+                                    providedCategories = airtelCategories,
+                                    totalChannelsCount = if (airtelTotalCount > 0) airtelTotalCount else null,
+                                    hasMore = airtelHasMore,
+                                    onLoadMore = { viewModel.loadMoreAirtelChannels() },
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    onCategorySelected = { viewModel.selectedAirtelCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryAirtel.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.AIRTEL_TV
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                                    onRefresh = { viewModel.loadAirtelTvIfNeeded(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingAirtel
+                                )
+                            }
+                            CineTab.JIO_TV_WW -> {
+                                TvScreen(
+                                    tvChannelsState = jioWwChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedJioWwCategory,
+                                    searchQuery = searchQueryJioWw,
+                                    screenTitle = "Jio-Tv (World Wide)",
+                                    screenIcon = Icons.Default.Public,
+                                    providedCategories = jioWwCategories,
+                                    totalChannelsCount = if (jioWwTotalCount > 0) jioWwTotalCount else null,
+                                    hasMore = jioWwHasMore,
+                                    onLoadMore = { viewModel.loadMoreJioWwChannels() },
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    onCategorySelected = { viewModel.selectedJioWwCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryJioWw.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.JIO_TV_WW
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) },
+                                    onRefresh = { viewModel.loadJioWwIfNeeded(isPullRefresh = true) },
+                                    isRefreshing = isRefreshingJioWw
+                                )
+                            }
+                            CineTab.IPTV_PLAYER -> {
+                                IptvPlayerScreen(
+                                    channelsState = iptvChannelsState,
+                                    favorites = favorites,
+                                    selectedCategory = selectedIptvCategory,
+                                    searchQuery = searchQueryIptv,
+                                    categories = iptvCategories,
+                                    totalChannelsCount = iptvTotalCount,
+                                    hasMore = iptvHasMore,
+                                    onLoadMore = { viewModel.loadMoreIptvChannels() },
+                                    activeChannel = activeChannel,
+                                    playerContent = null,
+                                    currentPlaylistInput = customIptvInput,
+                                    isLoading = isCustomIptvLoading,
+                                    onLoadPlaylist = { input -> viewModel.loadIptvPlaylist(input) },
+                                    onDeletePlaylist = { viewModel.deleteIptvPlaylist() },
+                                    onCategorySelected = { viewModel.selectedIptvCategory.value = it },
+                                    onSearchQueryChange = { viewModel.searchQueryIptv.value = it },
+                                    onChannelClick = { channel ->
+                                        lastSourceTab = CineTab.IPTV_PLAYER
+                                        isPlayerExpanded = true
+                                        isPlayerFullscreen = false
+                                        viewModel.playChannel(channel)
+                                    },
+                                    onToggleFavorite = { channel -> viewModel.toggleFavoriteChannel(channel) }
                                 )
                             }
                             CineTab.HISTORY -> {
@@ -903,8 +1169,28 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                         onDismiss = { showNetworkStreamDialog = false },
                                         onPlayStream = { url, cookie, referer, origin, drmLicense, drmType ->
                                             viewModel.playCustomStream(url, cookie, referer, origin, drmLicense, drmType)
-                                            isPlayerFullscreen = true
-                                            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                            if (alwaysLandscape && !isTvDevice) {
+                                                isPlayerFullscreen = true
+                                                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                                            }
+                                        }
+                                    )
+                                }
+
+                                // App Settings Dialog Modal
+                                if (showSettingsDialog) {
+                                    SettingsDialog(
+                                        selectedAspectRatio = defaultAspectRatio,
+                                        isAlwaysLandscape = alwaysLandscape,
+                                        isDarkMode = isDarkMode,
+                                        onSelectAspectRatio = { mode ->
+                                            viewModel.setDefaultAspectRatio(mode)
+                                        },
+                                        onToggleAlwaysLandscape = { enabled ->
+                                            viewModel.setAlwaysLandscape(enabled)
+                                        },
+                                        onDismiss = {
+                                            viewModel.closeSettingsDialog()
                                         }
                                     )
                                 }
@@ -959,6 +1245,18 @@ fun CineArenaApp(viewModel: MainViewModel, isInPipMode: Boolean = false) {
                                                 )
                                             }
                                         }
+                                    )
+                                }
+
+                                // Remote Version Endpoint App Update Dialog
+                                appUpdateInfo?.let { update ->
+                                    com.example.ui.components.AppUpdateDialog(
+                                        updateInfo = update,
+                                        downloadState = updateDownloadState,
+                                        isDarkMode = isDarkMode,
+                                        onStartDownload = { viewModel.startUpdateDownload() },
+                                        onInstallDownloadedApk = { viewModel.installDownloadedUpdate() },
+                                        onDismiss = { viewModel.dismissUpdateDialog() }
                                     )
                                 }
                             }

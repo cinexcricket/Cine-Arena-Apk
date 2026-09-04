@@ -85,10 +85,10 @@ object StreamUrlParser {
         val lowerUrl = url.lowercase()
         val detectedType = when {
             lowerUrl.endsWith(".mp4") || lowerUrl.contains(".mp4?") || lowerUrl.endsWith(".mkv") || lowerUrl.contains(".mkv?") || lowerUrl.contains("/videos/") -> "mp4"
-            lowerUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") || lowerUrl.contains("/dash/") || lowerUrl.contains("cenc.mpd") -> "dash"
-            lowerUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") || lowerUrl.contains("/hls/") || lowerUrl.contains("playlist.m3u8") -> "hls"
+            lowerUrl.endsWith(".mpd") || lowerUrl.contains(".mpd?") || lowerUrl.contains("/dash/") || lowerUrl.contains("cenc.mpd") || !extractedDrmLicense.isNullOrBlank() -> "dash"
+            lowerUrl.endsWith(".m3u8") || lowerUrl.contains(".m3u8?") || lowerUrl.contains("/hls/") || lowerUrl.contains("playlist.m3u8") || lowerUrl.contains(".php") -> "hls"
+            lowerUrl.endsWith(".ts") || lowerUrl.contains(".ts?") || Regex("""^https?://[^/]+/[A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+/\d+(\?.*)?$""").matches(url) -> "ts"
             lowerUrl.contains("<iframe") || lowerUrl.contains("pages.dev") -> "iframe"
-            !extractedDrmLicense.isNullOrBlank() -> "dash"
             else -> "hls"
         }
 

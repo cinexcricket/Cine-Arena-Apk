@@ -46,6 +46,12 @@ fun TvScreen(
     favorites: List<FavoriteEntity>,
     selectedCategory: String,
     searchQuery: String,
+    screenTitle: String = "TV Channels",
+    screenIcon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Tv,
+    providedCategories: List<String> = emptyList(),
+    totalChannelsCount: Int? = null,
+    hasMore: Boolean = false,
+    onLoadMore: (() -> Unit)? = null,
     activeChannel: ChannelItem? = null,
     playerContent: (@Composable () -> Unit)? = null,
     onCategorySelected: (String) -> Unit,
@@ -54,10 +60,14 @@ fun TvScreen(
     onToggleFavorite: (ChannelItem) -> Unit,
     onRefresh: () -> Unit,
     isRefreshing: Boolean = false,
+    topContentComposable: (@Composable () -> Unit)? = null,
+    emptyStateContent: (@Composable () -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val categories = remember(tvChannelsState) {
-        if (tvChannelsState is UiState.Success) {
+    val categories = remember(tvChannelsState, providedCategories) {
+        if (providedCategories.isNotEmpty()) {
+            providedCategories
+        } else if (tvChannelsState is UiState.Success) {
             val fetchedCategories = tvChannelsState.data
                 .flatMap { it.parsedCategories }
                 .filter { it.isNotBlank() }
@@ -102,18 +112,27 @@ fun TvScreen(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        Icons.Default.Tv,
+                        imageVector = screenIcon,
                         contentDescription = null,
                         tint = CinePrimary,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (playerContent != null) "More TV Channels" else "TV Channels",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 17.sp,
-                        color = CineTextPrimary
-                    )
+                    Column {
+                        Text(
+                            text = if (playerContent != null) "More $screenTitle" else screenTitle,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = CineTextPrimary
+                        )
+                        if (totalChannelsCount != null && totalChannelsCount > 0) {
+                            Text(
+                                text = "%,d Channels Available".format(totalChannelsCount),
+                                fontSize = 11.sp,
+                                color = CineTextSecondary
+                            )
+                        }
+                    }
                 }
 
                 Surface(
@@ -139,6 +158,11 @@ fun TvScreen(
                         )
                     }
                 }
+            }
+
+            if (topContentComposable != null) {
+                topContentComposable()
+                Spacer(modifier = Modifier.height(8.dp))
             }
 
             // Search Input Bar
@@ -169,7 +193,7 @@ fun TvScreen(
                     ) {
                         if (searchQuery.isEmpty()) {
                             Text(
-                                text = "Search TV channels...",
+                                text = "Search $screenTitle...",
                                 color = CineTextSecondary,
                                 fontSize = 13.sp
                             )
@@ -251,38 +275,72 @@ fun TvScreen(
             }
             is UiState.Error -> {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(text = tvChannelsState.message, color = CineLiveRed)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Button(
-                            onClick = onRefresh,
-                            colors = ButtonDefaults.buttonColors(containerColor = CinePrimary)
-                        ) { Text("Retry") }
+                    if (emptyStateContent != null) {
+                        emptyStateContent()
+                    } else {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier.padding(24.dp)
+                        ) {
+                            Text(
+                                text = tvChannelsState.message,
+                                color = CineLiveRed,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = onRefresh,
+                                colors = ButtonDefaults.buttonColors(containerColor = CinePrimary)
+                            ) { Text("Retry") }
+                        }
                     }
                 }
             }
             is UiState.Success -> {
-                val filteredChannels = remember(tvChannelsState.data, selectedCategory, searchQuery) {
-                    tvChannelsState.data.filter { channel ->
-                        val matchesCategory = if (selectedCategory == "All Channels" || selectedCategory == "All") true
-                        else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
+                val filteredChannels = remember(tvChannelsState.data, selectedCategory, searchQuery, providedCategories) {
+                    if (providedCategories.isNotEmpty()) {
+                        tvChannelsState.data
+                    } else {
+                        tvChannelsState.data.filter { channel ->
+                            val matchesCategory = if (selectedCategory == "All Channels" || selectedCategory == "All") true
+                            else channel.parsedCategories.any { it.equals(selectedCategory, ignoreCase = true) }
 
-                        val matchesSearch = if (searchQuery.isBlank()) true
-                        else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
+                            val matchesSearch = if (searchQuery.isBlank()) true
+                            else channel.name.contains(searchQuery, ignoreCase = true) || channel.parsedCategories.any { it.contains(searchQuery, ignoreCase = true) }
 
-                        matchesCategory && matchesSearch
+                            matchesCategory && matchesSearch
+                        }
                     }
                 }
 
                 if (filteredChannels.isEmpty()) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("No TV channels found", color = CineTextSecondary)
+                        if (emptyStateContent != null) {
+                            emptyStateContent()
+                        } else {
+                            Text("No TV channels found", color = CineTextSecondary)
+                        }
                     }
                 } else {
                     val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp
                     val gridColumns = if (screenWidth >= 800) 6 else if (screenWidth >= 500) 4 else 2
+                    val gridState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
+
+                    val shouldLoadMore = remember {
+                        derivedStateOf {
+                            val total = gridState.layoutInfo.totalItemsCount
+                            val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                            total > 0 && lastVisible >= total - 8
+                        }
+                    }
+                    LaunchedEffect(shouldLoadMore.value) {
+                        if (shouldLoadMore.value && hasMore && onLoadMore != null) {
+                            onLoadMore()
+                        }
+                    }
 
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Fixed(gridColumns),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -301,6 +359,26 @@ fun TvScreen(
                                 onChannelClick = { onChannelClick(channel) },
                                 onToggleFavorite = { onToggleFavorite(channel) }
                             )
+                        }
+
+                        if (hasMore && onLoadMore != null) {
+                            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    OutlinedButton(
+                                        onClick = onLoadMore,
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = CinePrimary),
+                                        border = BorderStroke(1.dp, CinePrimary),
+                                        shape = RoundedCornerShape(12.dp)
+                                    ) {
+                                        Text("Load More Channels", fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

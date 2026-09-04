@@ -9,13 +9,17 @@ import com.example.model.ChannelItem
 import com.example.model.ChatMessage
 import com.example.model.DrmConfig
 import com.example.model.MatchItem
+import com.example.network.AirtelTvResult
 import com.example.network.CineRepository
+import com.example.util.M3uParseResult
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -64,6 +68,223 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _movies = MutableStateFlow<UiState<List<MatchItem>>>(UiState.Loading)
     val movies: StateFlow<UiState<List<MatchItem>>> = _movies.asStateFlow()
+
+    // Airtel TV Lazy Loading State (Only fetched when screen opened)
+    private val _airtelTvResult = MutableStateFlow<AirtelTvResult?>(null)
+    private val _airtelUiState = MutableStateFlow<UiState<List<ChannelItem>>>(UiState.Loading)
+    val isRefreshingAirtel = MutableStateFlow(false)
+    val selectedAirtelCategory = MutableStateFlow("All Channels")
+    val searchQueryAirtel = MutableStateFlow("")
+    val airtelDisplayLimit = MutableStateFlow(80)
+
+    private var isAirtelLoaded = false
+    private var isAirtelLoading = false
+
+    val airtelChannelsState: StateFlow<UiState<List<ChannelItem>>> = combine(
+        _airtelUiState,
+        _airtelTvResult,
+        selectedAirtelCategory,
+        searchQueryAirtel,
+        airtelDisplayLimit
+    ) { uiState, result, category, query, limit ->
+        if (uiState !is UiState.Success || result == null) {
+            return@combine uiState
+        }
+
+        val trimmedQuery = query.trim()
+        val channels = if (trimmedQuery.isNotEmpty()) {
+            val pool = if (category == "All Channels") result.allChannels else (result.channelsByCategory[category] ?: emptyList())
+            pool.filter {
+                it.name.contains(trimmedQuery, ignoreCase = true) ||
+                it.category.contains(trimmedQuery, ignoreCase = true)
+            }.take(150)
+        } else if (category != "All Channels") {
+            result.channelsByCategory[category] ?: emptyList()
+        } else {
+            result.allChannels.take(limit)
+        }
+
+        UiState.Success(channels)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UiState.Loading
+    )
+
+    val airtelCategories: StateFlow<List<String>> = _airtelTvResult.map { result ->
+        result?.categories ?: listOf("All Channels")
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = listOf("All Channels")
+    )
+
+    val airtelTotalCount: StateFlow<Int> = _airtelTvResult.map { result ->
+        result?.allChannels?.size ?: 0
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0
+    )
+
+    val airtelHasMore: StateFlow<Boolean> = combine(
+        _airtelTvResult,
+        selectedAirtelCategory,
+        searchQueryAirtel,
+        airtelDisplayLimit
+    ) { result, category, query, limit ->
+        if (result == null || query.isNotBlank() || category != "All Channels") false
+        else limit < result.allChannels.size
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    // Jio-TV World Wide Lazy Loading State
+    private val _jioWwResult = MutableStateFlow<M3uParseResult?>(null)
+    private val _jioWwUiState = MutableStateFlow<UiState<List<ChannelItem>>>(UiState.Loading)
+    val isRefreshingJioWw = MutableStateFlow(false)
+    val selectedJioWwCategory = MutableStateFlow("All Channels")
+    val searchQueryJioWw = MutableStateFlow("")
+    val jioWwDisplayLimit = MutableStateFlow(80)
+
+    private var isJioWwLoaded = false
+    private var isJioWwLoading = false
+
+    val jioWwChannelsState: StateFlow<UiState<List<ChannelItem>>> = combine(
+        _jioWwUiState,
+        _jioWwResult,
+        selectedJioWwCategory,
+        searchQueryJioWw,
+        jioWwDisplayLimit
+    ) { uiState, result, category, query, limit ->
+        if (uiState !is UiState.Success || result == null) {
+            return@combine uiState
+        }
+
+        val trimmedQuery = query.trim()
+        val channels = if (trimmedQuery.isNotEmpty()) {
+            val pool = if (category == "All Channels") result.allChannels else (result.channelsByCategory[category] ?: emptyList())
+            pool.filter {
+                it.name.contains(trimmedQuery, ignoreCase = true) ||
+                it.category.contains(trimmedQuery, ignoreCase = true)
+            }.take(150)
+        } else if (category != "All Channels") {
+            result.channelsByCategory[category] ?: emptyList()
+        } else {
+            result.allChannels.take(limit)
+        }
+
+        UiState.Success(channels)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UiState.Loading
+    )
+
+    val jioWwCategories: StateFlow<List<String>> = _jioWwResult.map { result ->
+        result?.categories ?: listOf("All Channels")
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = listOf("All Channels")
+    )
+
+    val jioWwTotalCount: StateFlow<Int> = _jioWwResult.map { result ->
+        result?.allChannels?.size ?: 0
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0
+    )
+
+    val jioWwHasMore: StateFlow<Boolean> = combine(
+        _jioWwResult,
+        selectedJioWwCategory,
+        searchQueryJioWw,
+        jioWwDisplayLimit
+    ) { result, category, query, limit ->
+        if (result == null || query.isNotBlank() || category != "All Channels") false
+        else limit < result.allChannels.size
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
+
+    // IPTV Player (Custom User Playlist) State
+    private val iptvPrefs = getApplication<Application>().getSharedPreferences("cine_iptv_prefs", android.content.Context.MODE_PRIVATE)
+    val customIptvInput = MutableStateFlow(iptvPrefs.getString("saved_playlist_input", "") ?: "")
+    private val _customIptvResult = MutableStateFlow<M3uParseResult?>(null)
+    private val _customIptvUiState = MutableStateFlow<UiState<List<ChannelItem>>>(
+        if ((iptvPrefs.getString("saved_playlist_input", "") ?: "").isBlank()) UiState.Success(emptyList()) else UiState.Loading
+    )
+    val isCustomIptvLoading = MutableStateFlow(false)
+    val selectedIptvCategory = MutableStateFlow("All Channels")
+    val searchQueryIptv = MutableStateFlow("")
+    val iptvDisplayLimit = MutableStateFlow(80)
+
+    val iptvChannelsState: StateFlow<UiState<List<ChannelItem>>> = combine(
+        _customIptvUiState,
+        _customIptvResult,
+        selectedIptvCategory,
+        searchQueryIptv,
+        iptvDisplayLimit
+    ) { uiState, result, category, query, limit ->
+        if (uiState !is UiState.Success || result == null) {
+            return@combine uiState
+        }
+
+        val trimmedQuery = query.trim()
+        val channels = if (trimmedQuery.isNotEmpty()) {
+            val pool = if (category == "All Channels") result.allChannels else (result.channelsByCategory[category] ?: emptyList())
+            pool.filter {
+                it.name.contains(trimmedQuery, ignoreCase = true) ||
+                it.category.contains(trimmedQuery, ignoreCase = true)
+            }.take(150)
+        } else if (category != "All Channels") {
+            result.channelsByCategory[category] ?: emptyList()
+        } else {
+            result.allChannels.take(limit)
+        }
+
+        UiState.Success(channels)
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = UiState.Success(emptyList())
+    )
+
+    val iptvCategories: StateFlow<List<String>> = _customIptvResult.map { result ->
+        result?.categories ?: listOf("All Channels")
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = listOf("All Channels")
+    )
+
+    val iptvTotalCount: StateFlow<Int> = _customIptvResult.map { result ->
+        result?.allChannels?.size ?: 0
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = 0
+    )
+
+    val iptvHasMore: StateFlow<Boolean> = combine(
+        _customIptvResult,
+        selectedIptvCategory,
+        searchQueryIptv,
+        iptvDisplayLimit
+    ) { result, category, query, limit ->
+        if (result == null || query.isNotBlank() || category != "All Channels") false
+        else limit < result.allChannels.size
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = false
+    )
 
     // Filter states
     val isDarkMode = MutableStateFlow(true)
@@ -120,10 +341,111 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
 
+    // App Settings (Aspect Ratio, Always Landscape)
+    private val appSettingsManager = com.example.data.AppSettingsManager.getInstance(application)
+    val defaultAspectRatio: StateFlow<com.example.player.VideoResizeMode> = appSettingsManager.defaultAspectRatio
+    val alwaysLandscape: StateFlow<Boolean> = appSettingsManager.alwaysLandscape
+
+    private val _showSettingsDialog = MutableStateFlow(false)
+    val showSettingsDialog: StateFlow<Boolean> = _showSettingsDialog.asStateFlow()
+
+    fun openSettingsDialog() {
+        _showSettingsDialog.value = true
+    }
+
+    fun closeSettingsDialog() {
+        _showSettingsDialog.value = false
+    }
+
+    fun setDefaultAspectRatio(mode: com.example.player.VideoResizeMode) {
+        appSettingsManager.setDefaultAspectRatio(mode)
+    }
+
+    fun setAlwaysLandscape(enabled: Boolean) {
+        appSettingsManager.setAlwaysLandscape(enabled)
+    }
+
+    // Remote Version Endpoint App Update State
+    private val _appUpdateInfo = MutableStateFlow<com.example.update.AppUpdateInfo?>(null)
+    val appUpdateInfo: StateFlow<com.example.update.AppUpdateInfo?> = _appUpdateInfo.asStateFlow()
+
+    private val _updateDownloadState = MutableStateFlow<com.example.update.UpdateDownloadState>(com.example.update.UpdateDownloadState.Idle)
+    val updateDownloadState: StateFlow<com.example.update.UpdateDownloadState> = _updateDownloadState.asStateFlow()
+
+    private var downloadedApkFile: java.io.File? = null
+
     init {
         loadData()
         observeDbChatMessages()
         startHostingerChatSync()
+        checkForAppUpdate()
+    }
+
+    fun checkForAppUpdate() {
+        viewModelScope.launch {
+            try {
+                val customUrl = userProfile.value?.hostingerApiUrl
+                val update = com.example.update.AppUpdateManager.checkForUpdate(
+                    context = getApplication(),
+                    customApiUrl = customUrl
+                )
+                if (update != null) {
+                    _appUpdateInfo.value = update
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        _appUpdateInfo.value = null
+        _updateDownloadState.value = com.example.update.UpdateDownloadState.Idle
+    }
+
+    fun startUpdateDownload() {
+        val update = _appUpdateInfo.value ?: return
+        viewModelScope.launch {
+            _updateDownloadState.value = com.example.update.UpdateDownloadState.Downloading(0f)
+            val result = com.example.update.AppUpdateManager.downloadApk(
+                context = getApplication(),
+                downloadUrl = update.downloadUrl,
+                onProgress = { progress, downloaded, total ->
+                    _updateDownloadState.value = com.example.update.UpdateDownloadState.Downloading(
+                        progress = progress,
+                        downloadedBytes = downloaded,
+                        totalBytes = total
+                    )
+                }
+            )
+
+            result.fold(
+                onSuccess = { file ->
+                    downloadedApkFile = file
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        getApplication(),
+                        "${getApplication<Application>().packageName}.fileprovider",
+                        file
+                    )
+                    _updateDownloadState.value = com.example.update.UpdateDownloadState.ReadyToInstall(
+                        apkUri = uri,
+                        localFile = file
+                    )
+                    // Trigger installation automatically once downloaded
+                    installDownloadedUpdate()
+                },
+                onFailure = { error ->
+                    _updateDownloadState.value = com.example.update.UpdateDownloadState.Error(
+                        message = error.localizedMessage ?: "Failed to download update APK. Please check your connection."
+                    )
+                }
+            )
+        }
+    }
+
+    fun installDownloadedUpdate() {
+        val file = downloadedApkFile ?: return
+        com.example.update.AppUpdateManager.installApk(getApplication(), file)
     }
 
     fun startPresenceSyncForActiveStream() {
@@ -492,6 +814,132 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (isPullRefresh) {
                 isRefreshingMovies.value = false
             }
+        }
+    }
+
+    fun loadMoreAirtelChannels() {
+        val currentLimit = airtelDisplayLimit.value
+        val total = _airtelTvResult.value?.allChannels?.size ?: 0
+        if (currentLimit < total) {
+            airtelDisplayLimit.value = (currentLimit + 80).coerceAtMost(total)
+        }
+    }
+
+    fun loadAirtelTvIfNeeded(isPullRefresh: Boolean = false) {
+        if (isAirtelLoading && !isPullRefresh) return
+        if (isAirtelLoaded && !isPullRefresh) return
+
+        viewModelScope.launch {
+            isAirtelLoading = true
+            if (isPullRefresh) {
+                isRefreshingAirtel.value = true
+            } else if (_airtelTvResult.value == null) {
+                _airtelUiState.value = UiState.Loading
+            }
+
+            val result = repository.fetchAirtelTvChannels(getApplication(), isPullRefresh)
+            result.onSuccess { data ->
+                _airtelTvResult.value = data
+                _airtelUiState.value = UiState.Success(data.allChannels)
+                isAirtelLoaded = true
+            }.onFailure { err ->
+                if (_airtelTvResult.value == null) {
+                    _airtelUiState.value = UiState.Error(err.message ?: "Failed to load Airtel TV channels. Please check internet connection.")
+                }
+            }
+
+            isAirtelLoading = false
+            if (isPullRefresh) {
+                isRefreshingAirtel.value = false
+            }
+        }
+    }
+
+    fun loadMoreJioWwChannels() {
+        val currentLimit = jioWwDisplayLimit.value
+        val total = _jioWwResult.value?.allChannels?.size ?: 0
+        if (currentLimit < total) {
+            jioWwDisplayLimit.value = (currentLimit + 80).coerceAtMost(total)
+        }
+    }
+
+    fun loadJioWwIfNeeded(isPullRefresh: Boolean = false) {
+        if (isJioWwLoading && !isPullRefresh) return
+        if (isJioWwLoaded && !isPullRefresh) return
+
+        viewModelScope.launch {
+            isJioWwLoading = true
+            if (isPullRefresh) {
+                isRefreshingJioWw.value = true
+            } else if (_jioWwResult.value == null) {
+                _jioWwUiState.value = UiState.Loading
+            }
+
+            val result = repository.fetchJioWwChannels(getApplication(), isPullRefresh)
+            result.onSuccess { data ->
+                _jioWwResult.value = data
+                _jioWwUiState.value = UiState.Success(data.allChannels)
+                isJioWwLoaded = true
+            }.onFailure { err ->
+                if (_jioWwResult.value == null) {
+                    _jioWwUiState.value = UiState.Error(err.message ?: "Failed to load Jio-Tv (World Wide) channels.")
+                }
+            }
+
+            isJioWwLoading = false
+            if (isPullRefresh) {
+                isRefreshingJioWw.value = false
+            }
+        }
+    }
+
+    fun loadMoreIptvChannels() {
+        val currentLimit = iptvDisplayLimit.value
+        val total = _customIptvResult.value?.allChannels?.size ?: 0
+        if (currentLimit < total) {
+            iptvDisplayLimit.value = (currentLimit + 80).coerceAtMost(total)
+        }
+    }
+
+    fun loadIptvPlaylist(input: String) {
+        val trimmed = input.trim()
+        if (trimmed.isBlank()) return
+
+        iptvPrefs.edit().putString("saved_playlist_input", trimmed).apply()
+        customIptvInput.value = trimmed
+
+        viewModelScope.launch {
+            isCustomIptvLoading.value = true
+            _customIptvUiState.value = UiState.Loading
+            iptvDisplayLimit.value = 80
+            selectedIptvCategory.value = "All Channels"
+
+            val result = repository.fetchCustomPlaylist(trimmed)
+            result.onSuccess { data ->
+                _customIptvResult.value = data
+                _customIptvUiState.value = UiState.Success(data.allChannels)
+            }.onFailure { err ->
+                _customIptvUiState.value = UiState.Error(err.message ?: "Failed to parse playlist. Please verify the URL or M3U content.")
+            }
+
+            isCustomIptvLoading.value = false
+        }
+    }
+
+    fun deleteIptvPlaylist() {
+        iptvPrefs.edit().remove("saved_playlist_input").apply()
+        customIptvInput.value = ""
+        _customIptvResult.value = null
+        _customIptvUiState.value = UiState.Success(emptyList())
+        selectedIptvCategory.value = "All Channels"
+        searchQueryIptv.value = ""
+        iptvDisplayLimit.value = 80
+    }
+
+    fun loadSavedIptvIfNeeded() {
+        val saved = customIptvInput.value.trim()
+        if (saved.isNotEmpty() && _customIptvResult.value == null && !isCustomIptvLoading.value) {
+            loadIptvPlaylist(saved)
         }
     }
 
